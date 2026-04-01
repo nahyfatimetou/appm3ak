@@ -1,0 +1,37 @@
+# Racine — M3AK (Flutter + NestJS + outils)
+__MACOSX/
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.idea/
+.vscode/
+
+# Secrets (ne jamais committer)
+.env
+.env.*
+!.env.example
+
+# Node / NestJS
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Flutter / Dart
+.dart_tool/
+.pub/
+.pub-cache/
+**/build/
+**/doc/api/
+*.iml
+**/ios/Flutter/.last_build_id
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/.gradle/
+**/android/.gradle/
+
+# Uploads locaux (si présents)
+**/uploads/
+**/tmp/
