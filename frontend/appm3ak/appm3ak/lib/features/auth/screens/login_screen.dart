@@ -31,20 +31,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   bool _looksLikeEmail(String v) =>
-      v.trim().contains('@') && RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v.trim());
+      v.trim().contains('@') &&
+      // Accepte les TLD longs (ex: .local, .museum) et sous-domaines.
+      RegExp(r'^[\w.+-]+@([\w-]+\.)+[\w-]{2,24}$').hasMatch(v.trim());
 
   Future<void> _submit() async {
+    if (!mounted) return;
     setState(() {
       _errorMessage = null;
       _isLoading = true;
     });
     if (!_formKey.currentState!.validate()) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
       return;
     }
     final input = _emailController.text.trim();
     final email = _looksLikeEmail(input) ? input : null;
     if (email == null) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _errorMessage = 'Veuillez entrer une adresse e-mail pour vous connecter.';
@@ -52,15 +57,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       return;
     }
     try {
-      print('🔵 [LoginScreen] Tentative de connexion avec: $email');
       await ref.read(authStateProvider.notifier).login(
             email: email,
             password: _passwordController.text,
           );
-      print('✅ [LoginScreen] Connexion réussie, redirection vers /home');
       if (mounted) context.go('/home');
     } catch (e) {
-      print('❌ [LoginScreen] Erreur: $e');
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         String errorMsg = AppStrings.fr().errorGeneric;
@@ -91,11 +94,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           } else if (e.type == DioExceptionType.connectionError) {
             errorMsg =
                 'Connexion impossible à l’API. Vérifiez : 1) le backend tourne (npm run start:dev dans backend-m3ak 2) sur le port 3000 ; '
-                '2) ouvrez http://localhost:3000 dans le navigateur ; 3) sur le web, relancez l’API après mise à jour CORS ; '
-                '4) essayez : flutter run --dart-define=API_BASE_URL=http://127.0.0.1:3000';
+                '2) sur téléphone, utilisez l’IP du PC (même Wi‑Fi) via --dart-define=API_BASE_URL=http://<IP_PC>:3000 ; '
+                '3) sur émulateur Android, 10.0.2.2 fonctionne.';
           } else if (e.type == DioExceptionType.connectionTimeout || 
                      e.type == DioExceptionType.receiveTimeout) {
-            errorMsg = 'Timeout: Le serveur ne répond pas. Vérifiez votre connexion.';
+            errorMsg =
+                'Timeout: serveur injoignable. Si vous êtes sur téléphone, '
+                '10.0.2.2 ne marche pas → mettez API_BASE_URL=http://<IP_PC>:3000.';
           }
         }
         _errorMessage = errorMsg;
@@ -117,6 +122,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Si le splash a renvoyé ici pendant que /user/me chargeait encore, on envoie vers /home dès que l’utilisateur est connu.
+    ref.listen(authStateProvider, (_, next) {
+      if (next.hasValue && next.requireValue != null && context.mounted) {
+        context.go('/home');
+      }
+    });
+
     final strings = AppStrings.fr();
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;

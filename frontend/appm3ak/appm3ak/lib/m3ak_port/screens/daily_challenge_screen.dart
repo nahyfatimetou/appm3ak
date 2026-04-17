@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:appm3ak/m3ak_port/services/api_service.dart';
 import 'package:appm3ak/m3ak_port/models/user_data.dart';
@@ -15,11 +15,11 @@ class DailyChallengeScreen extends StatefulWidget {
   final ApiService? apiService;
 
   const DailyChallengeScreen({
-    Key? key,
+    super.key,
     this.userId = '1',
     this.initialLevel = 1,
     this.apiService,
-  }) : super(key: key);
+  });
 
   @override
   State<DailyChallengeScreen> createState() => _DailyChallengeScreenState();
@@ -500,7 +500,7 @@ class _DailyChallengeScreenState extends State<DailyChallengeScreen> {
                     const SizedBox(width: 12),
                     Expanded(child: Text(q.answers[i],
                         style: TextStyle(color: textC, fontWeight: FontWeight.w500, fontSize: 14))),
-                    if (trailing != null) trailing,
+                    ?trailing,
                   ]),
                 ),
               );

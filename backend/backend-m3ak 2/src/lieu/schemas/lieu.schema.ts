@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
 
 export type LieuDocument = Lieu & Document;
 
@@ -43,6 +43,42 @@ export class Lieu {
   @ApiPropertyOptional({ description: 'Score d\'accessibilité (0-100)' })
   @Prop({ type: Number, default: 0 })
   scoreAccessibilite: number;
+
+  @ApiPropertyOptional({
+    description: 'Niveau de risque (safe/caution/danger) pour affichage couleur',
+    enum: ['safe', 'caution', 'danger'],
+    default: 'safe',
+  })
+  @Prop({ type: String, default: 'safe' })
+  riskLevel: string;
+
+  @ApiPropertyOptional({
+    description: 'Statut de vérification du signalement communautaire',
+    enum: ['auto', 'pending', 'verified', 'rejected'],
+    default: 'verified',
+  })
+  @Prop({ type: String, default: 'verified' })
+  verificationStatus: string;
+
+  @ApiPropertyOptional({ description: 'Lien post source (si issu de la communauté)' })
+  @Prop({ type: Types.ObjectId, ref: 'Post', required: false })
+  sourcePostId?: Types.ObjectId;
+
+  @ApiPropertyOptional({ description: 'Confiance IA [0..1]' })
+  @Prop({ type: Number, required: false, default: null })
+  aiConfidence?: number | null;
+
+  @ApiPropertyOptional({ description: 'Résumé IA ou texte publié', required: false })
+  @Prop({ type: String, required: false, default: null })
+  aiSummary?: string | null;
+
+  @ApiPropertyOptional({ description: 'Obstacle présent selon IA/validation', default: false })
+  @Prop({ type: Boolean, default: false })
+  obstaclePresent: boolean;
+
+  @ApiPropertyOptional({ description: 'Dernier signalement lié' })
+  @Prop({ type: Date, required: false, default: null })
+  lastReportedAt?: Date | null;
 
   @ApiPropertyOptional({ description: 'Rampe disponible', default: false })
   @Prop({ type: Boolean, default: false })

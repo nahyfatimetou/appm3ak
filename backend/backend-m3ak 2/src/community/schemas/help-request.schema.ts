@@ -46,6 +46,62 @@ export class HelpRequest {
   @Prop({ type: Number, default: 1 })
   urgencyScore: number;
 
+  /** Priorité métier (règles HelpPriorityService) : low | medium | high | critical */
+  @ApiPropertyOptional({ description: 'Niveau de priorité calculé' })
+  @Prop({ type: String, default: null })
+  priority: string | null;
+
+  @ApiPropertyOptional({ description: 'Score agrégé avant seuils' })
+  @Prop({ type: Number, default: null })
+  priorityScore: number | null;
+
+  @ApiPropertyOptional({ description: 'Phrase de justification (FR)' })
+  @Prop({ type: String, default: null })
+  priorityReason: string | null;
+
+  @ApiPropertyOptional({ description: 'Signaux ayant influencé le score', type: [String] })
+  @Prop({ type: [String], default: [] })
+  prioritySignals: string[];
+
+  /** Type de besoin (flux inclusif, optionnel). */
+  @ApiPropertyOptional({ description: 'Type de besoin' })
+  @Prop({ type: String, default: null })
+  helpType: string | null;
+
+  /** Mode de saisie côté client (texte, voix, raccourci volume, etc.). */
+  @ApiPropertyOptional({ description: 'Mode de saisie' })
+  @Prop({ type: String, default: null })
+  inputMode: string | null;
+
+  /** Profil déclaré du demandeur. */
+  @ApiPropertyOptional({ description: 'Profil demandeur' })
+  @Prop({ type: String, default: null })
+  requesterProfile: string | null;
+
+  @ApiPropertyOptional({ description: 'Besoin de consignes audio' })
+  @Prop({ type: Boolean, default: null })
+  needsAudioGuidance: boolean | null;
+
+  @ApiPropertyOptional({ description: 'Besoin de repères visuels' })
+  @Prop({ type: Boolean, default: null })
+  needsVisualSupport: boolean | null;
+
+  @ApiPropertyOptional({ description: 'Besoin d’aide physique' })
+  @Prop({ type: Boolean, default: null })
+  needsPhysicalAssistance: boolean | null;
+
+  @ApiPropertyOptional({ description: 'Langage simple' })
+  @Prop({ type: Boolean, default: null })
+  needsSimpleLanguage: boolean | null;
+
+  @ApiPropertyOptional({ description: 'Demande pour une autre personne' })
+  @Prop({ type: Boolean, default: null })
+  isForAnotherPerson: boolean | null;
+
+  @ApiPropertyOptional({ description: 'Clé de message prédéfini' })
+  @Prop({ type: String, default: null })
+  presetMessageKey: string | null;
+
   @ApiProperty({ description: 'Date de création' })
   createdAt?: Date;
 }

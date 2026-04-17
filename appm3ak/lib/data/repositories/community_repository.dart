@@ -9,7 +9,6 @@ import '../api/endpoints.dart';
 import '../models/comment_model.dart';
 import '../models/help_request_model.dart';
 import '../models/post_model.dart';
-import '../models/simplified_text_model.dart';
 import '../models/accessibility_models.dart';
 
 /// Repository pour gérer les posts et demandes d'aide de la communauté.
@@ -154,28 +153,6 @@ class CommunityRepository {
     }
   }
 
-  /// Simplifie un texte selon la méthode FALC (Assistant d'Accessibilité Cognitive).
-  Future<SimplifiedTextModel> simplifyText({
-    required String text,
-    String level = 'facile',
-  }) async {
-    try {
-      final response = await _api.dio.post(
-        Endpoints.simplifyText,
-        data: {
-          'text': text,
-          'level': level,
-        },
-      );
-      return SimplifiedTextModel.fromJson(response.data as Map<String, dynamic>);
-    } on DioException catch (e) {
-      print('❌ [CommunityRepository] Erreur lors de la simplification:');
-      print('   Status Code: ${e.response?.statusCode}');
-      print('   Response Data: ${e.response?.data}');
-      rethrow;
-    }
-  }
-
   /// Génère un résumé flash des commentaires (handicap moteur)
   Future<FlashSummaryModel> getCommentsFlashSummary(String postId) async {
     try {
@@ -211,39 +188,6 @@ class CommunityRepository {
       print('❌ [CommunityRepository] Erreur inattendue lors de la génération LSF: $e');
       rethrow;
     }
-  }
-
-  /// Analyse une image pour un post (Compagnon de Route).
-  Future<Map<String, dynamic>> analyzePostImage({
-    required String postId,
-    required XFile image,
-  }) async {
-    final formData = FormData();
-    // Pour Flutter Web, utiliser readAsBytes
-    final bytes = await image.readAsBytes();
-    final filename = image.name.isNotEmpty 
-        ? image.name 
-        : (image.path.split('/').last.split('\\').last.isNotEmpty
-            ? image.path.split('/').last.split('\\').last
-            : 'image.jpg');
-    formData.files.add(
-      MapEntry(
-        'image',
-        MultipartFile.fromBytes(
-          bytes,
-          filename: filename,
-        ),
-      ),
-    );
-
-    final response = await _api.dio.post(
-      Endpoints.communityPostAnalyzeImage(postId),
-      data: formData,
-      options: Options(
-        headers: {'Content-Type': 'multipart/form-data'},
-      ),
-    );
-    return response.data as Map<String, dynamic>;
   }
 
   /// Récupère la liste des posts (avec pagination).

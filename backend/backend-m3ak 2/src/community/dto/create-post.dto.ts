@@ -1,6 +1,32 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsString, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform, Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
+import {
+  POST_INPUT_MODE_VALUES,
+  POST_LOCATION_SHARING_MODE_VALUES,
+  POST_NATURE_VALUES,
+  POST_TARGET_AUDIENCE_VALUES,
+} from '../enums/post-inclusion.enum';
 import { POST_TYPE_VALUES } from '../enums/post-type.enum';
+
+const DANGER_LEVELS = ['none', 'low', 'medium', 'critical'] as const;
+
+function parseOptionalBool(value: unknown): boolean | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === '1' || value === 'on') return true;
+  if (value === 'false' || value === '0') return false;
+  return undefined;
+}
 
 export class CreatePostDto {
   @ApiProperty({ description: 'Contenu du post' })
@@ -17,4 +43,86 @@ export class CreatePostDto {
   @MinLength(1, { message: 'Le type est requis' })
   @IsIn(POST_TYPE_VALUES, { message: 'Type de post invalide' })
   type: string;
+
+  /** Optionnel (multipart) : corrélation Lieu + alerte SOS si critique. */
+  @ApiPropertyOptional({ description: 'Latitude du signalement' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitude?: number;
+
+  @ApiPropertyOptional({ description: 'Longitude du signalement' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitude?: number;
+
+  @ApiPropertyOptional({
+    description: 'Niveau de danger (`critical` + coords → alerte SOS proximité)',
+    enum: DANGER_LEVELS,
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn([...DANGER_LEVELS])
+  dangerLevel?: string;
+
+  // —— Inclusif (optionnel, rétrocompatible) ——
+
+  @ApiPropertyOptional({ enum: POST_NATURE_VALUES })
+  @IsOptional()
+  @IsString()
+  @IsIn([...POST_NATURE_VALUES])
+  postNature?: string;
+
+  @ApiPropertyOptional({ enum: POST_TARGET_AUDIENCE_VALUES })
+  @IsOptional()
+  @IsString()
+  @IsIn([...POST_TARGET_AUDIENCE_VALUES])
+  targetAudience?: string;
+
+  @ApiPropertyOptional({ enum: POST_INPUT_MODE_VALUES })
+  @IsOptional()
+  @IsString()
+  @IsIn([...POST_INPUT_MODE_VALUES])
+  inputMode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => parseOptionalBool(value))
+  @IsBoolean()
+  isForAnotherPerson?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => parseOptionalBool(value))
+  @IsBoolean()
+  needsAudioGuidance?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => parseOptionalBool(value))
+  @IsBoolean()
+  needsVisualSupport?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => parseOptionalBool(value))
+  @IsBoolean()
+  needsPhysicalAssistance?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(({ value }) => parseOptionalBool(value))
+  @IsBoolean()
+  needsSimpleLanguage?: boolean;
+
+  @ApiPropertyOptional({ enum: POST_LOCATION_SHARING_MODE_VALUES })
+  @IsOptional()
+  @IsString()
+  @IsIn([...POST_LOCATION_SHARING_MODE_VALUES])
+  locationSharingMode?: string;
 }

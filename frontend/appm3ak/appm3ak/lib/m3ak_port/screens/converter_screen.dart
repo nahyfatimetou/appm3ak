@@ -1,8 +1,8 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 class ConverterScreen extends StatefulWidget {
-  const ConverterScreen({Key? key}) : super(key: key);
+  const ConverterScreen({super.key});
 
   @override
   State<ConverterScreen> createState() => _ConverterScreenState();

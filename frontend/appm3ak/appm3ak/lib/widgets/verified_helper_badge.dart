@@ -70,3 +70,45 @@ class VerifiedHelperBadge extends StatelessWidget {
     );
   }
 }
+
+/// Badge « Partenaire » — compte labellisé (association, commerce engagé).
+class PartnerOrgBadge extends StatelessWidget {
+  const PartnerOrgBadge({super.key, this.compact = true});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFF1565C0);
+    return Tooltip(
+      message: 'Compte partenaire — information vérifiée localement',
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 6 : 8,
+          vertical: compact ? 2 : 4,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withValues(alpha: 0.55)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.handshake_outlined, size: compact ? 14 : 16, color: color),
+            if (!compact) ...[
+              const SizedBox(width: 4),
+              Text(
+                'Partenaire',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: color,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}

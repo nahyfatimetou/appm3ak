@@ -2,6 +2,16 @@ import 'package:equatable/equatable.dart';
 
 import 'user_model.dart';
 
+bool? _parseBool(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v.toString().toLowerCase().trim();
+  if (s == 'true' || s == '1') return true;
+  if (s == 'false' || s == '0') return false;
+  return null;
+}
+
 /// Type de post dans la communauté.
 enum PostType {
   general,
@@ -60,6 +70,20 @@ class PostModel extends Equatable {
     this.images,
     this.createdAt,
     this.updatedAt,
+    this.merciCount = 0,
+    this.hasPlace = false,
+    this.obstaclePresent = false,
+    this.validationYes = 0,
+    this.validationNo = 0,
+    this.postNature,
+    this.targetAudience,
+    this.inputMode,
+    this.isForAnotherPerson,
+    this.needsAudioGuidance,
+    this.needsVisualSupport,
+    this.needsPhysicalAssistance,
+    this.needsSimpleLanguage,
+    this.locationSharingMode,
   });
 
   factory PostModel.fromJson(Map<String, dynamic> json) {
@@ -94,6 +118,20 @@ class PostModel extends Equatable {
       updatedAt: json['updatedAt'] != null
           ? DateTime.tryParse(json['updatedAt'].toString())
           : null,
+      merciCount: (json['merciCount'] as num?)?.toInt() ?? 0,
+      hasPlace: json['hasPlace'] as bool? ?? false,
+      obstaclePresent: json['obstaclePresent'] as bool? ?? false,
+      validationYes: (json['validationYes'] as num?)?.toInt() ?? 0,
+      validationNo: (json['validationNo'] as num?)?.toInt() ?? 0,
+      postNature: json['postNature']?.toString(),
+      targetAudience: json['targetAudience']?.toString(),
+      inputMode: json['inputMode']?.toString(),
+      isForAnotherPerson: _parseBool(json['isForAnotherPerson']),
+      needsAudioGuidance: _parseBool(json['needsAudioGuidance']),
+      needsVisualSupport: _parseBool(json['needsVisualSupport']),
+      needsPhysicalAssistance: _parseBool(json['needsPhysicalAssistance']),
+      needsSimpleLanguage: _parseBool(json['needsSimpleLanguage']),
+      locationSharingMode: json['locationSharingMode']?.toString(),
     );
   }
 
@@ -106,6 +144,26 @@ class PostModel extends Equatable {
   final List<String>? images;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  /// Nombre de « Merci » (remerciements).
+  final int merciCount;
+  final bool hasPlace;
+  final bool obstaclePresent;
+  final int validationYes;
+  final int validationNo;
+
+  final String? postNature;
+  final String? targetAudience;
+  final String? inputMode;
+  final bool? isForAnotherPerson;
+  final bool? needsAudioGuidance;
+  final bool? needsVisualSupport;
+  final bool? needsPhysicalAssistance;
+  final bool? needsSimpleLanguage;
+  final String? locationSharingMode;
+
+  /// Afficher la carte de validation obstacle (lieu / obstacle signalé).
+  bool get showsObstacleValidation =>
+      hasPlace || obstaclePresent || (validationYes + validationNo) > 0;
 
   /// Nom de l'utilisateur (si disponible).
   String get userName => user?.displayName ?? 'Utilisateur';
@@ -124,6 +182,15 @@ class PostModel extends Equatable {
         'images': images,
         'createdAt': createdAt?.toIso8601String(),
         'updatedAt': updatedAt?.toIso8601String(),
+        'postNature': postNature,
+        'targetAudience': targetAudience,
+        'inputMode': inputMode,
+        'isForAnotherPerson': isForAnotherPerson,
+        'needsAudioGuidance': needsAudioGuidance,
+        'needsVisualSupport': needsVisualSupport,
+        'needsPhysicalAssistance': needsPhysicalAssistance,
+        'needsSimpleLanguage': needsSimpleLanguage,
+        'locationSharingMode': locationSharingMode,
       };
 
   PostModel copyWith({
@@ -136,6 +203,20 @@ class PostModel extends Equatable {
     List<String>? images,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? merciCount,
+    bool? hasPlace,
+    bool? obstaclePresent,
+    int? validationYes,
+    int? validationNo,
+    String? postNature,
+    String? targetAudience,
+    String? inputMode,
+    bool? isForAnotherPerson,
+    bool? needsAudioGuidance,
+    bool? needsVisualSupport,
+    bool? needsPhysicalAssistance,
+    bool? needsSimpleLanguage,
+    String? locationSharingMode,
   }) =>
       PostModel(
         id: id ?? this.id,
@@ -147,9 +228,42 @@ class PostModel extends Equatable {
         images: images ?? this.images,
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
+        merciCount: merciCount ?? this.merciCount,
+        hasPlace: hasPlace ?? this.hasPlace,
+        obstaclePresent: obstaclePresent ?? this.obstaclePresent,
+        validationYes: validationYes ?? this.validationYes,
+        validationNo: validationNo ?? this.validationNo,
+        postNature: postNature ?? this.postNature,
+        targetAudience: targetAudience ?? this.targetAudience,
+        inputMode: inputMode ?? this.inputMode,
+        isForAnotherPerson: isForAnotherPerson ?? this.isForAnotherPerson,
+        needsAudioGuidance: needsAudioGuidance ?? this.needsAudioGuidance,
+        needsVisualSupport: needsVisualSupport ?? this.needsVisualSupport,
+        needsPhysicalAssistance:
+            needsPhysicalAssistance ?? this.needsPhysicalAssistance,
+        needsSimpleLanguage: needsSimpleLanguage ?? this.needsSimpleLanguage,
+        locationSharingMode: locationSharingMode ?? this.locationSharingMode,
       );
 
   @override
-  List<Object?> get props => [id, userId, contenu, type, images];
+  List<Object?> get props => [
+        id,
+        userId,
+        contenu,
+        type,
+        images,
+        merciCount,
+        validationYes,
+        validationNo,
+        postNature,
+        targetAudience,
+        inputMode,
+        isForAnotherPerson,
+        needsAudioGuidance,
+        needsVisualSupport,
+        needsPhysicalAssistance,
+        needsSimpleLanguage,
+        locationSharingMode,
+      ];
 }
 

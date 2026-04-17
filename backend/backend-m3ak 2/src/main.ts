@@ -62,7 +62,12 @@ async function bootstrap() {
   SwaggerModule.setup('api', app, document);
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
+  // En dev : écouter sur toutes les interfaces pour l’émulateur Android (10.0.2.2) et un vrai téléphone (IP LAN).
+  if (isProd) {
+    await app.listen(port);
+  } else {
+    await app.listen(port, '0.0.0.0');
+  }
   console.log(`Ma3ak API running on http://localhost:${port}`);
   console.log(`Swagger docs: http://localhost:${port}/api`);
 }

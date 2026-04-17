@@ -1,11 +1,11 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'gesture_illustrations.dart';
 import 'package:video_player/video_player.dart';
 
 class PracticalScenariosScreen extends StatelessWidget {
-  const PracticalScenariosScreen({Key? key}) : super(key: key);
+  const PracticalScenariosScreen({super.key});
 
   static final List<Map<String, dynamic>> scenarios = [
     {
@@ -360,7 +360,7 @@ class _Chip extends StatelessWidget {
 // =====================================================================
 class ScenarioSimulationScreen extends StatefulWidget {
   final Map<String, dynamic> scenario;
-  const ScenarioSimulationScreen({Key? key, required this.scenario}) : super(key: key);
+  const ScenarioSimulationScreen({super.key, required this.scenario});
 
   @override
   State<ScenarioSimulationScreen> createState() => _ScenarioSimulationScreenState();

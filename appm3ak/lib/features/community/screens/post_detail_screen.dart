@@ -5,12 +5,9 @@ import 'package:go_router/go_router.dart';
 import '../../../core/l10n/app_strings.dart';
 import '../../../data/models/comment_model.dart';
 import '../../../data/models/post_model.dart';
-import '../../../data/models/simplified_text_model.dart';
 import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
 import '../widgets/post_image_gallery.dart';
-import '../widgets/ai_badge.dart';
-import '../widgets/simplified_text_widget.dart';
 
 /// Écran de détails d'un post avec commentaires.
 class PostDetailScreen extends ConsumerStatefulWidget {
@@ -25,9 +22,6 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _commentController = TextEditingController();
   bool _isSubmittingComment = false;
-  SimplifiedTextModel? _simplifiedText;
-  bool _isSimplifying = false;
-  bool _showSimplified = false;
 
   @override
   void dispose() {
@@ -67,52 +61,6 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     }
   }
 
-  Future<void> _simplifyText(String text) async {
-    // Si on a déjà simplifié et qu'on veut voir l'original
-    if (_showSimplified && _simplifiedText != null) {
-      setState(() {
-        _showSimplified = false;
-      });
-      return;
-    }
-
-    // Si on a déjà simplifié, afficher directement
-    if (_simplifiedText != null && !_showSimplified) {
-      setState(() {
-        _showSimplified = true;
-      });
-      return;
-    }
-
-    // Sinon, simplifier le texte
-    setState(() => _isSimplifying = true);
-
-    try {
-      final simplified = await ref.read(simplifyTextProvider((
-        text: text,
-        level: 'facile',
-      )).future);
-
-      if (mounted) {
-        setState(() {
-          _simplifiedText = simplified;
-          _showSimplified = true;
-          _isSimplifying = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isSimplifying = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erreur lors de la simplification: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
@@ -123,6 +71,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
     final postAsync = ref.watch(postByIdProvider(widget.postId));
     final commentsAsync = ref.watch(postCommentsProvider(widget.postId));
+    final flashSummaryAsync =
+        ref.watch(commentsFlashSummaryProvider(widget.postId));
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -145,61 +95,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       const SizedBox(height: 16),
                       Divider(color: theme.colorScheme.outline),
                       const SizedBox(height: 16),
-                      // Bouton Simplifier
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: _isSimplifying
-                                  ? null
-                                  : () => _simplifyText(post.contenu),
-                              icon: _isSimplifying
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.auto_awesome),
-                              label: Text(_showSimplified ? 'Voir texte original' : 'Simplifier le texte'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.teal,
-                                side: BorderSide(color: Colors.teal),
-                              ),
-                            ),
-                          ),
-                        ],
+                      Text(
+                        post.contenu,
+                        style: theme.textTheme.bodyLarge,
                       ),
-                      const SizedBox(height: 16),
-                      // Contenu : texte original ou simplifié
-                      if (_showSimplified && _simplifiedText != null)
-                        SimplifiedTextWidget(
-                          simplifiedText: _simplifiedText!,
-                          onClose: () {
-                            setState(() {
-                              _showSimplified = false;
-                            });
-                          },
-                        )
-                      else
-                        Text(
-                          post.contenu,
-                          style: theme.textTheme.bodyLarge,
-                        ),
-                      if (_showSimplified && _simplifiedText != null)
-                        const SizedBox(height: 16),
-                      // Images avec badges IA
                       if (post.images != null && post.images!.isNotEmpty) ...[
                         const SizedBox(height: 16),
-                        PostImageGallery(
-                          images: post.images!,
-                          accessibilityAnalysis: post.accessibilityAnalysis,
-                        ),
-                      ],
-                      // Badge IA si pas d'images mais analyse disponible
-                      if ((post.images == null || post.images!.isEmpty) &&
-                          post.accessibilityAnalysis != null) ...[
-                        const SizedBox(height: 16),
-                        AIBadge(analysis: post.accessibilityAnalysis!),
+                        PostImageGallery(images: post.images!),
                       ],
                       const SizedBox(height: 24),
                       // Commentaires
@@ -210,7 +112,39 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      // Liste des commentaires
+                      flashSummaryAsync.when(
+                        data: (flash) {
+                          if (flash.summary.trim().isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return Card(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            margin: const EdgeInsets.only(bottom: 12),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Résumé rapide',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    flash.summary,
+                                    style: theme.textTheme.bodyMedium,
+                                    softWrap: true,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                        loading: () => const SizedBox.shrink(),
+                        error: (_, __) => const SizedBox.shrink(),
+                      ),
                       commentsAsync.when(
                         data: (comments) {
                           if (comments.isEmpty) {

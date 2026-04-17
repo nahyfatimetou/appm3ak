@@ -1,9 +1,9 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'gesture_illustrations.dart';
 import 'package:appm3ak/m3ak_port/screens/sign_camera_screen.dart';
 
 class SignLanguageScreen extends StatelessWidget {
-  const SignLanguageScreen({Key? key}) : super(key: key);
+  const SignLanguageScreen({super.key});
 
   static final List<Map<String, dynamic>> lessons = [
     {
@@ -410,7 +410,7 @@ class _CornerPainter extends CustomPainter {
 // =====================================================================
 class LessonDetailScreen extends StatefulWidget {
   final Map<String, dynamic> lesson;
-  const LessonDetailScreen({Key? key, required this.lesson}) : super(key: key);
+  const LessonDetailScreen({super.key, required this.lesson});
 
   @override
   State<LessonDetailScreen> createState() => _LessonDetailScreenState();

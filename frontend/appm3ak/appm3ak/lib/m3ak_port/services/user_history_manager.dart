@@ -1,4 +1,4 @@
-﻿import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 
 class UserHistoryManager {
@@ -37,21 +37,21 @@ class UserHistoryManager {
     }
 
     await _prefs.setString(
-      _keyExerciseHistory + '_$userId',
+      '${_keyExerciseHistory}_$userId',
       jsonEncode(history.map((e) => e.toJson()).toList()),
     );
 
-    final totalSessions = _prefs.getInt(_keyTotalSessions + '_$userId') ?? 0;
-    await _prefs.setInt(_keyTotalSessions + '_$userId', totalSessions + 1);
+    final totalSessions = _prefs.getInt('${_keyTotalSessions}_$userId') ?? 0;
+    await _prefs.setInt('${_keyTotalSessions}_$userId', totalSessions + 1);
 
-    final currentStreak = _prefs.getInt(_keySuccessStreak + '_$userId') ?? 0;
+    final currentStreak = _prefs.getInt('${_keySuccessStreak}_$userId') ?? 0;
     final newStreak = score >= 0.8 ? currentStreak + 1 : 0;
-    await _prefs.setInt(_keySuccessStreak + '_$userId', newStreak);
+    await _prefs.setInt('${_keySuccessStreak}_$userId', newStreak);
   }
 
   Future<List<ExerciseRecord>> getExerciseHistory() async {
     await _init();
-    final historyJson = _prefs.getString(_keyExerciseHistory + '_$userId');
+    final historyJson = _prefs.getString('${_keyExerciseHistory}_$userId');
     if (historyJson != null) {
       final List<dynamic> jsonList = jsonDecode(historyJson);
       return jsonList.map((json) => ExerciseRecord.fromJson(json)).toList();
@@ -88,12 +88,12 @@ class UserHistoryManager {
 
   Future<int> getTotalSessions() async {
     await _init();
-    return _prefs.getInt(_keyTotalSessions + '_$userId') ?? 0;
+    return _prefs.getInt('${_keyTotalSessions}_$userId') ?? 0;
   }
 
   Future<int> getSuccessStreak() async {
     await _init();
-    return _prefs.getInt(_keySuccessStreak + '_$userId') ?? 0;
+    return _prefs.getInt('${_keySuccessStreak}_$userId') ?? 0;
   }
 }
 

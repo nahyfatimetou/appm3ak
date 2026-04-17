@@ -1,481 +1,251 @@
-# Ma3ak — Documentation technique et fonctionnelle
+# Ma3ak — Application mobile Flutter
 
-**Ma3ak** (معاك) est une application mobile Flutter destinée aux **personnes en situation de handicap en Tunisie** et à leurs **accompagnants**. Elle vise à faciliter la mobilité, l’autonomie et l’inclusion sociale.
-
-Ce README est conçu pour être partagé avec l’équipe : il décrit le projet, l’architecture, la configuration et comment démarrer ou contribuer.
+Documentation technique et fonctionnelle du **frontend** principal (`frontend/appm3ak/appm3ak`). L’application **Ma3ak** vise la mobilité, l’autonomie et l’inclusion des personnes en situation de handicap en Tunisie et de leurs accompagnants.
 
 ---
 
-## Pour les collègues — Démarrage rapide
+## 1. Vue d’ensemble
 
-> **Objectif :** Pouvoir cloner le projet, lancer l’app et comprendre où se trouvent les parties principales du code.
-
-### En bref
-
-1. **Cloner le dépôt** (ou récupérer le dossier du projet).
-2. **Prérequis :** Flutter installé (SDK ^3.10), backend API Ma3ak disponible (voir [Configuration](#4-configuration-et-environnement)).
-3. **Lancer l’app :**
-   ```bash
-   flutter pub get
-   flutter run
-   ```
-   Si l’API est sur votre machine et que vous utilisez l’émulateur Android :
-   ```bash
-   flutter run -d android --dart-define=API_BASE_URL=http://10.0.2.2:3000
-   ```
-4. **Où est le code ?**
-   - **Écrans** : `lib/features/` (auth, home, profile, accompaniment).
-   - **API / données** : `lib/data/` (client HTTP, modèles, repositories).
-   - **État global** : `lib/providers/` (auth, thème, router).
-   - **Configuration** : `lib/core/config/` (URL API), `lib/core/theme/` (thème clair/sombre).
-
-### Points importants pour la collaboration
-
-- **Authentification :** JWT stocké de façon sécurisée ; après login/register, redirection vers `/home`. L’état « connecté » est géré par `authStateProvider` (Riverpod).
-- **Rôles :** Bénéficiaire vs Accompagnant — le contenu de l’accueil change selon le rôle (`HomeTab` vs `HomeCompanionTab`).
-- **Thème :** Mode clair/sombre/système, persistant (bouton sur les écrans Login et Inscription, et dans le Profil).
-- **Langues :** Français et arabe (fichiers `.arb` + `AppStrings` dans `lib/core/l10n/`).
+| Élément | Détail |
+|--------|--------|
+| **Framework** | Flutter (SDK Dart ^3.10) |
+| **État global** | Riverpod (`flutter_riverpod`) |
+| **Navigation** | `go_router` avec garde d’auth et redirections |
+| **HTTP** | `dio` via une couche `ApiClient` + JWT dans `flutter_secure_storage` |
+| **Thème** | Clair / sombre (`theme_provider`) |
+| **i18n** | Chaînes centralisées (`core/l10n/app_strings.dart`) selon la langue préférée utilisateur |
+| **API** | Backend NestJS documenté dans `backend/backend-m3ak 2/README.md` |
 
 ---
 
-## Sommaire
-
-1. [Vue d’ensemble fonctionnelle](#1-vue-densemble-fonctionnelle)
-2. [Stack technique](#2-stack-technique)
-3. [Architecture et structure du projet](#3-architecture-et-structure-du-projet)
-4. [Configuration et environnement](#4-configuration-et-environnement)
-5. [Authentification et sécurité](#5-authentification-et-sécurité)
-6. [API et couche données](#6-api-et-couche-données)
-7. [État global et navigation](#7-état-global-et-navigation)
-8. [Fonctionnalités par écran](#8-fonctionnalités-par-écran)
-9. [Thème et accessibilité](#9-thème-et-accessibilité)
-10. [Localisation](#10-localisation)
-11. [Installation et exécution](#11-installation-et-exécution)
-12. [Tests et qualité](#12-tests-et-qualité)
-13. [Comment contribuer](#13-comment-contribuer)
-
----
-
-## 1. Vue d’ensemble fonctionnelle
-
-> Décrit les rôles utilisateurs et les parcours dans l’app. Utile pour savoir quel écran correspond à quel usage.
-
-### Rôles utilisateurs
-
-| Rôle | Constante | Description |
-|------|-----------|-------------|
-| **Bénéficiaire** | `UserRole.beneficiary` | Personne en situation de handicap ; utilise les services (trajets, santé, lieux, aides). |
-| **Accompagnant** | `UserRole.companion` | Accompagne un ou plusieurs bénéficiaires ; voit demandes d’assistance, planning, utilisateurs suivis. |
-| **Admin** | `UserRole.admin` | Administrateur (hors scope mobile initial). |
-
-### Parcours typiques
-
-- **Bénéficiaire** : Splash → Login/Register → Home (services, SOS, assistant actuel, carte) → Santé / Transport / Milieux / Profil. Accès à « Mes accompagnants ».
-- **Accompagnant** : Même entrée ; Home dédié (utilisateurs suivis, demandes d’assistance, mon planning, ressources). Accès à « Mes bénéficiaires ».
-
----
-
-## 2. Stack technique
-
-> Liste des technologies utilisées. Permet de savoir quelles librairies sont déjà en place (Riverpod, GoRouter, Dio, etc.).
-
-| Domaine | Technologie |
-|---------|-------------|
-| **Framework** | Flutter (SDK ^3.10) |
-| **Langage** | Dart |
-| **State management** | Riverpod (`flutter_riverpod`) |
-| **Navigation** | GoRouter (`go_router`) |
-| **HTTP** | Dio |
-| **Stockage sécurisé** | `flutter_secure_storage` (JWT) |
-| **Préférences** | `shared_preferences` (thème, etc.) |
-| **Connexion Google** | `google_sign_in` |
-| **Images** | `image_picker` (photo de profil) |
-| **Modèles** | `equatable` |
-| **i18n** | Fichiers `.arb` (ar/fr) + `AppStrings` manuel |
-
-Backend attendu : API REST (Node.js/Express ou équivalent) avec JWT, hébergée sur une URL configurable.
-
----
-
-## 3. Architecture et structure du projet
-
-> Où se trouve chaque responsabilité. Les commentaires dans l’arborescence indiquent le rôle des dossiers/fichiers principaux.
-
-### Arborescence `lib/`
+## 2. Structure des dossiers (`lib/`)
 
 ```
 lib/
-├── main.dart                 # Point d'entrée : WidgetsBinding, ProviderScope, runApp(Ma3akApp)
-├── app.dart                  # MaterialApp.router, thème light/dark, themeMode, GoRouter
-├── core/                     # Code partagé (config, thème, services, widgets réutilisables)
-│   ├── config/               # URL API : lecture dart-define ou valeur par défaut selon plateforme
-│   │   ├── app_config.dart       # API_BASE_URL, apiBaseUrl, uploadsBaseUrl
-│   │   ├── app_config_io.dart    # Android → 10.0.2.2:3000, iOS/autre → localhost
-│   │   └── app_config_stub.dart # Web → localhost
-│   ├── theme/
-│   │   └── app_theme.dart    # Thème Material 3 : light (bleu #1976D2) et dark (accent #5DDDF9)
-│   ├── l10n/
-│   │   └── app_strings.dart # Chaînes FR/AR manuelles (createAccount, loginButton, etc.)
-│   ├── services/
-│   │   └── token_storage_service.dart  # Lecture/écriture JWT via FlutterSecureStorage
-│   ├── utils/
-│   │   └── storage_keys.dart # Clés de stockage (accessToken, etc.)
-│   └── widgets/
-│       ├── app_logo.dart     # Logo asset ou icône accessibilité en fallback
-│       ├── accessible_button.dart
-│       └── loading_overlay.dart
-├── data/                     # Couche données : API, modèles, repositories
-│   ├── api/
-│   │   ├── api_client.dart   # Instance Dio, baseUrl, timeouts, intercepteurs
-│   │   ├── auth_interceptor.dart  # Ajout Bearer JWT (sauf login/register)
-│   │   └── endpoints.dart    # Constantes des routes API (/auth/login, /user/me, etc.)
-│   ├── models/
-│   │   ├── user_model.dart   # UserModel, UserRole, HandicapType, PreferredLanguage
-│   │   └── auth_response.dart # accessToken, user
-│   └── repositories/
-│       ├── auth_repository.dart  # login, loginWithGoogle, logout, token
-│       └── user_repository.dart # register, getMe, updateMe, image, accompagnants, bénéficiaires
-├── providers/                # État global (Riverpod)
-│   ├── api_providers.dart    # tokenStorage, apiClient (injection)
-│   ├── auth_providers.dart   # authRepository, userRepository, authStateProvider
-│   └── theme_provider.dart   # themeModeProvider (light/dark/system, persistant SharedPreferences)
+├── main.dart                 # Point d’entrée, ProviderScope, init volume Android
+├── app.dart                  # MaterialApp.router, thème, M3akGlobalAssistantLayer
+├── core/
+│   ├── config/               # AppConfig : API_BASE_URL, ALLOW_GUEST, FORCE_LOGIN_ON_START
+│   ├── l10n/                 # AppStrings (FR/AR selon profil)
+│   ├── theme/                # AppTheme
+│   ├── widgets/              # Composants partagés
+│   ├── location/             # Position courante (géoloc)
+│   └── volume/               # Hub volume Android (raccourcis accessibilité)
+├── data/
+│   ├── api/                  # ApiClient, Endpoints (chemins REST alignés backend)
+│   ├── models/               # User, posts, SOS, lieux, etc.
+│   └── repositories/         # Auth, user, community, SOS, transport, medical, emergency, location
+├── providers/
+│   ├── api_providers.dart    # ApiClient, repositories « transverses »
+│   ├── auth_providers.dart   # AuthStateNotifier, login / Google / refresh profil
+│   ├── community_providers.dart
+│   ├── health_providers.dart
+│   └── theme_provider.dart
 ├── router/
-│   └── app_router.dart       # GoRouter : /, /login, /register, /home, /profile, /profile-edit, etc.
-├── features/                 # Écrans et logique par fonctionnalité
-│   ├── auth/
-│   │   └── screens/          # SplashScreen, LoginScreen, RegisterScreen (inscription multi-étapes)
-│   ├── home/
-│   │   └── screens/          # MainShell (bottom nav), HomeTab (bénéficiaire), HomeCompanionTab
-│   ├── profile/
-│   │   └── screens/          # ProfileTab, ProfileScreen (édition + photo)
-│   └── accompaniment/
-│       └── screens/          # AccompagnantsScreen, BeneficiairesScreen
-└── l10n/
-    ├── app_fr.arb / app_ar.arb   # Chaînes générées (Flutter l10n)
-    └── app_localizations*.dart  # Générés par Flutter
+│   └── app_router.dart       # Toutes les routes GoRouter + redirect auth
+├── features/                 # Écrans par domaine métier
+│   ├── auth/                 # Splash, login, register
+│   ├── home/                 # MainShell, onglets Accueil / Santé / Transport / Milieux / Profil
+│   ├── health/               # Onglet santé, chat IA santé (HealthAiChatScreen)
+│   ├── community/            # Hub communauté, posts, lieux, demandes d’aide, accessibilité moteur
+│   ├── profile/              # Profil
+│   ├── sos/                  # Alertes SOS
+│   ├── medical/              # Dossier médical, détection posture (expérimental)
+│   ├── accompaniment/        # Contacts urgence, demandes transport
+│   ├── m3ak/                 # Page inclusion (point d’entrée vers port M3AK)
+│   └── accessibility/        # Création de post sans tactile classique (vibration, geste, voix)
+├── m3ak_port/                # Module « inclusion » : LSF, gestes, Braille, visages, défis, API /m3ak
+├── m3ak_assist/              # Assistant global vocal (TTS/STT), navigation vocale, lancement création post
 ```
-
-### Logique des couches
-
-- **UI** : écrans dans `features/*/screens/`, widgets partagés dans `core/widgets/`.
-- **État** : Riverpod dans `providers/` ; `authStateProvider` pilote la redirection (Splash, MainShell).
-- **Données** : `AuthRepository` + `UserRepository` ; pas de couche « use case » explicite.
-- **API** : `ApiClient` (Dio) + `AuthInterceptor` ; endpoints centralisés dans `Endpoints`.
 
 ---
 
-## 4. Configuration et environnement
+## 3. Configuration et exécution
 
-> Comment pointer l’app vers la bonne API (locale ou distante). Important pour les collègues qui lancent l’app en local.
+### Variables (`--dart-define`)
 
-### URL de l’API
+| Variable | Rôle |
+|----------|------|
+| `API_BASE_URL` | URL du backend (ex. `http://192.168.1.10:3000` sur téléphone physique). Si vide, défaut plateforme : Android émulateur → `http://10.0.2.2:3000`, sinon `http://localhost:3000` (`app_config_io.dart`). |
+| `ALLOW_GUEST=true` | Mode invité : navigation sans login (redirect vers `/home`). |
+| `FORCE_LOGIN_ON_START=true` | Force déconnexion au démarrage (démo). |
 
-- **Variable** : `API_BASE_URL` (compile-time via `--dart-define` ou valeur par défaut).
-- **Défaut** :
-  - **Android (émulateur)** : `http://10.0.2.2:3000` (10.0.2.2 = machine hôte depuis l’émulateur).
-  - **iOS / Desktop / Web** : `http://localhost:3000` (stub pour le web).
-
-Exemples :
+### Commandes usuelles
 
 ```bash
-# API de production ou staging
-flutter run --dart-define=API_BASE_URL=https://api.ma3ak.tn
-
-# Émulateur Android : API tournant sur le PC
-flutter run -d android --dart-define=API_BASE_URL=http://10.0.2.2:3000
+cd frontend/appm3ak/appm3ak
+flutter pub get
+flutter run
+# Exemple avec API distante :
+flutter run --dart-define=API_BASE_URL=http://IP_DU_PC:3000
 ```
 
-Fichiers concernés : `lib/core/config/app_config.dart`, `app_config_io.dart`, `app_config_stub.dart`.
+### Dépendances notables (`pubspec.yaml`)
 
-### Logo
-
-- Image attendue : `assets/images/logo.png`.
-- Si absent : affichage d’un pictogramme accessibilité (voir `lib/core/widgets/app_logo.dart`).
-- Dans `pubspec.yaml` : section `flutter.assets` avec `assets/images/`.
+- **Réseau / sécurité** : `dio`, `flutter_secure_storage`, `shared_preferences`
+- **Auth Google** : `google_sign_in`
+- **Médias / ML** : `camera`, `google_ml_kit`, `tflite_flutter`, `image_picker`
+- **Accessibilité** : `flutter_tts`, `speech_to_text`, `vibration`, `sensors_plus`
+- **Géoloc** : `geolocator`
+- **Navigation** : `go_router`
 
 ---
 
-## 5. Authentification et sécurité
-
-> Flux login/logout et où est stocké le token. Utile pour déboguer les problèmes de connexion ou modifier le flux d’auth.
+## 4. Authentification et navigation
 
 ### Flux
 
-1. **Splash** : lecture de `authStateProvider` (token + `GET /user/me`). Si token valide et user OK → `/home`, sinon → `/login`.
-2. **Login** : email + mot de passe → `POST /auth/login` ; réponse `access_token` + `user` → token enregistré via `TokenStorageService`, état mis à jour, puis `context.go('/home')`.
-3. **Google** : `google_sign_in` → `idToken` → `POST /auth/google` → même traitement que login.
-4. **Logout** : suppression du token (secure storage), `authStateProvider` à `null` ; l’UI redirige vers login si nécessaire.
+1. **Splash** (`/`) : chargement de l’état auth (`authStateProvider`).
+2. **Sans token** : routes publiques `/`, `/login`, `/register` ; toute autre route → `/login`.
+3. **Avec token valide** : `GET /user/me` ; utilisateur chargé.
+4. **Token invalide** : logout silencieux.
+5. **`AppConfig.allowGuest`** : bypass login, redirection `/home` depuis splash/login/register.
 
-### Stockage du token
+### `GoRouter` (`router/app_router.dart`)
 
-- **Service** : `TokenStorageService` (package `flutter_secure_storage`).
-- **Clé** : `StorageKeys.accessToken` (`'access_token'`).
-- **Android** : `AndroidOptions(encryptedSharedPreferences: true)`.
-
-### Intercepteur HTTP
-
-- **AuthInterceptor** : pour chaque requête, si le chemin **n’est pas** dans la liste « sans auth », ajout de `Authorization: Bearer <token>`.
-- **Chemins sans token** : `/auth/login`, `/auth/google`, `/auth/register`, `/user/register`.
-- En cas de **401**, l’erreur est propagée ; l’app (et éventuellement un listener global) peut déconnecter et rediriger vers login.
+- **Shell principal** : `/home?tab=0..4` — `MainShell` avec `initialIndex` et option `communityTab` pour le sous-onglet « Milieux ».
+- **Profil** : `/profile`, `/profile-edit`.
+- **Communauté** : `/community-posts`, `/create-post` (extra : texte initial, `M3akCreatePostLaunch`, `AccessibilityPostHandoff`), `/post-detail/:id`, `/help-requests`, `/create-help-request`, `/community-locations`, `/community-nearby`, `/community-contacts`, `/location-detail/:id`, `/submit-location`, `/haptic-help`.
+- **Accessibilité création de post** : `/create-post-head-gesture`, `/create-post-vibration`, `/create-post-voice-vibration`.
+- **Santé** : `/health-chat` (avec `HealthChatLaunch`), redirect `/sante` → `/home?tab=1`.
+- **Autres** : `/accompagnants`, `/beneficiaires`, `/medical-record`, `/sos-alerts`, `/activity-posture-detection`, `/m3ak-inclusion`.
 
 ---
 
-## 6. API et couche données
+## 5. Shell principal (`MainShell`)
 
-> Liste des endpoints et des modèles. Référence pour ajouter une nouvelle route ou un nouveau champ.
+Barre du bas à **5 onglets** :
+
+| Index | Libellé (concept) | Contenu |
+|-------|-------------------|---------|
+| 0 | Accueil | `HomeTab` si utilisateur **bénéficiaire** (`isBeneficiary`), sinon `HomeCompanionTab` pour accompagnant. |
+| 1 | Santé | `HealthTabScreen` — santé, liens vers chat IA santé. |
+| 2 | Transport | Placeholder (transport détaillé peut être branché ailleurs : `/beneficiaires`, repositories transport). |
+| 3 | Milieux | `M3akCommunityHubScreen` — hub **POST / AIDE / LIEU** avec guide vocal. |
+| 4 | Profil | `ProfileTab`. |
+
+Les URLs sont synchronisées avec `context.go('/home?tab=N&communityTab=M')` pour le deep linking et les commandes vocales.
+
+---
+
+## 6. Couche données
+
+### `Endpoints` (`data/api/endpoints.dart`)
+
+Centralise les chemins REST (auth, user, medical-records, sos-alerts, emergency-contacts, location, transport, transport-reviews, lieux, lieu-reservations, community, accessibility, education, notifications).  
+**Note** : des constantes `surveillance/*` peuvent exister côté client pour une fonctionnalité « proches » ; vérifier l’implémentation réelle sur le backend ciblé.
+
+### Repositories
+
+| Fichier | Responsabilité |
+|---------|----------------|
+| `auth_repository.dart` | Login email/mot de passe, Google, stockage JWT |
+| `user_repository.dart` | Profil, recherche utilisateurs |
+| `community_repository.dart` | Posts, commentaires, demandes d’aide, lieux voisins |
+| `sos_repository.dart` | Alertes SOS |
+| `transport_repository.dart` | Demandes et matching transport |
+| `emergency_contacts_repository.dart` | Contacts urgence |
+| `medical_records_repository.dart` | Dossier médical |
+| `location_repository.dart` | Mise à jour position (proches / carte) |
 
 ### Client HTTP
 
-- **ApiClient** : instance Dio avec `baseUrl: AppConfig.apiBaseUrl`, timeouts 30 s, headers `Content-Type` / `Accept` JSON.
-- Intercepteurs : `AuthInterceptor`, `LogInterceptor` (request/response/error en debug).
-
-### Endpoints utilisés
-
-| Méthode | Chemin | Usage |
-|--------|--------|--------|
-| POST | `/auth/login` | Connexion email/password |
-| POST | `/auth/google` | Connexion Google (id_token) |
-| GET | `/auth/config-test` | Vérif config JWT/Google (optionnel) |
-| POST | `/user/register` | Inscription |
-| GET | `/user/me` | Profil courant |
-| PATCH | `/user/me` | Mise à jour profil |
-| DELETE | `/user/me` | Suppression compte |
-| PATCH | `/user/me/image` | Upload photo (multipart) |
-| GET | `/user/me/accompagnants` | Liste accompagnants (bénéficiaire) |
-| PATCH | `/user/me/accompagnants` | Ajout/retrait accompagnant |
-| GET | `/user/me/beneficiaires` | Liste bénéficiaires (accompagnant) |
-
-### Modèles principaux
-
-- **UserModel** : `id`, `nom`, `email`, `role`, `contact`, `image`, `ville`, `preferredLanguage`, `handicapTypes`, `bio`, `accompagnantsIds`, `createdAt`, `updatedAt`. Méthodes `fromJson` / `toJson`, `copyWith`, getters `isBeneficiary` / `isCompanion`.
-- **UserRole** : `beneficiary`, `companion`, `admin` (sérialisation API en majuscules).
-- **HandicapType** : `mobilityWheelchair`, `mobilityCrutches`, `visual`, `hearing`, `cognitive`, `other` (API : snake_case).
-- **PreferredLanguage** : `ar`, `fr`.
-- **AuthResponse** : `accessToken`, `user` (UserModel).
-
-### Inscription (payload)
-
-Champs envoyés à `POST /user/register` : `nom`, `email`, `password`, `contact`, et optionnellement `role`, `ville`, `preferredLanguage`, `handicapTypes` (liste), `bio`.
+`ApiClient` injecte le **Bearer token** via `TokenStorageService`. Les providers dans `api_providers.dart` exposent le client et les repositories SOS, transport, medical, emergency.
 
 ---
 
-## 7. État global et navigation
+## 7. Fonctionnalités métier (scénarios)
 
-> Où est géré l’état (connecté, thème) et quelles routes existent. Utile pour ajouter un écran ou un provider.
+### 7.1 Accueil
 
-### Providers Riverpod
+- Vue différentiée **handicapé** / **accompagnant**.
+- Accès rapide vers SOS, santé, communauté selon les cartes / actions définies dans `home_tab.dart` / `home_companion_tab.dart`.
 
-| Provider | Type | Rôle |
-|----------|------|------|
-| `tokenStorageProvider` | `TokenStorageService` | Lecture/écriture du JWT |
-| `apiClientProvider` | `ApiClient` | Client Dio avec callback `getAccessToken` |
-| `authRepositoryProvider` | `AuthRepository` | Login, logout, stockage token |
-| `userRepositoryProvider` | `UserRepository` | Register, getMe, updateMe, image, accompagnants, bénéficiaires |
-| `authStateProvider` | `StateNotifierProvider<..., AsyncValue<UserModel?>>` | État connecté (user ou null) ; initialise avec token + getMe |
-| `themeModeProvider` | `StateNotifierProvider<..., ThemeMode>` | Clair / Sombre / Système, persistant (SharedPreferences) |
-| `appRouterProvider` | `GoRouter` | Configuration des routes |
+### 7.2 Santé
 
-### Routes GoRouter
+- Onglet santé avec chaînes localisées.
+- **Chat IA santé** (`HealthAiChatScreen`) : conversation contextualisée avec le profil utilisateur ; route dédiée `/health-chat`.
 
-| Chemin | Écran | Remarque |
-|--------|--------|----------|
-| `/` | `SplashScreen` | Redirection selon auth |
-| `/login` | `LoginScreen` | Bouton bascule thème en haut à droite |
-| `/register` | `RegisterScreen` | Inscription multi-étapes ; bouton thème dans l’AppBar |
-| `/home` | `MainShell(initialIndex: 0)` | Query `tab` optionnel |
-| `/profile` | `MainShell(initialIndex: 4)` | Onglet Profil |
-| `/profile-edit` | `ProfileScreen` | Édition profil (nom, contact, photo, etc.) |
-| `/accompagnants` | `AccompagnantsScreen` | Bénéficiaire |
-| `/beneficiaires` | `BeneficiairesScreen` | Accompagnant |
+### 7.3 Communauté et « Milieux »
 
-### MainShell (après connexion)
+- **Posts** : création avec texte, images, géolocalisation, niveau de danger ; détail avec commentaires.
+- **Demandes d’aide** : liste, création, statuts.
+- **Lieux** : liste, détail, soumission de lieu, lieux à proximité (`CommunityNearbyPlacesScreen`).
+- **Hub** (`M3akCommunityHubScreen`) : regroupe les flux POST / AIDE / LIEU avec **navigation vocale** (`voice_navigation_*`).
+- **Pont critique → SOS** : géré côté serveur si danger critique + coordonnées (voir README backend).
 
-- **Barre de navigation** : 5 onglets — Accueil (0), Santé (1), Transport (2), Milieux (3), Profil (4).
-- **Contenu Accueil** : selon `user.isBeneficiary` → `HomeTab` (bénéficiaire) ou `HomeCompanionTab` (accompagnant).
-- Si `authStateProvider` donne `null` (ex. après logout), redirection vers `/login`.
+### 7.4 Accessibilité moteure (création de contenu)
 
----
+Écrans dédiés pour utilisateurs ayant des difficultés avec le tactile classique :
 
-## 8. Fonctionnalités par écran
+- **Vibration codée** (`VibrationCodedPostScreen`)
+- **Gestes tête** (`HeadGesturePostScreen`) + capteurs (`back_tap_sensors.dart`)
+- **Voix + vibration** (`VoiceVibrationPostScreen`)
+- Handoff vers `CreatePostScreen` via `AccessibilityPostHandoff`
+- Widgets : `motor_accessible_action.dart`, préférences `accessibility_post_prefs.dart`, `accessibility_motor_prefs.dart`
 
-> Résumé de ce que fait chaque écran et où se trouve la logique. Aide à retrouver rapidement le code d’une fonctionnalité.
+### 7.5 Assistant global (`M3akGlobalAssistantLayer`)
 
-### Splash
+Calque au-dessus de toute l’app :
 
-- Affiche logo + titre + indicateur de chargement.
-- Après ~800 ms, lit `authStateProvider` : `data(user)` → `/home` si user non null, sinon `/login` ; `loading` / `error` → `/login`.
+- **TTS** (`flutter_tts`) pour la lecture des retours.
+- **STT** pour commandes vocales (navigation vers onglets, ouverture création de post, etc.).
+- **Maintien long** (≈ 3 s) pour ouvrir l’assistant (réglages dans le fichier du layer).
+- Intégration avec `m3akRootNavigatorKey` pour `go_router`.
 
-### Login
+### 7.6 Module M3AK Port (`m3ak_port/`)
 
-- Champs : email (ou téléphone), mot de passe.
-- Bouton « Connexion » → `AuthStateNotifier.login` ; en cas de succès → `/home`.
-- **Bouton mode clair/sombre** en haut à droite (icône lune/soleil).
-- Lien « Mot de passe oublié » (UI prévue, logique à brancher).
-- « Se connecter avec Google » → `loginWithGoogle(idToken)` (à connecter avec `google_sign_in`).
-- Lien vers inscription → `/register`.
+Portage du volet **inclusion** (LSF, Braille, reconnaissance de gestes / visages) :
 
-### Register
+- **Écrans** : `m3ak_home_screen.dart`, `learning_center_screen`, `sign_language_screen`, `face_recognition_screen`, `converter_screen` (Braille), `daily_challenge_screen`, `practical_scenarios_screen`, `gesture_illustrations.dart`, etc.
+- **Services** : appels vers API backend préfixe `/m3ak` (`api_service.dart`) — prédiction Braille, exercices, explication de signes, détection visage (TensorFlow.js côté serveur pour certaines routes ; TFLite côté app pour flux locaux selon écran).
+- **Entrée UI** : `features/m3ak/m3ak_inclusion_page.dart` → route `/m3ak-inclusion`.
 
-- Formulaire **multi-étapes** (4 étapes) : rôle (Handicap / Accompagnant), nom, types de handicap, email/téléphone ; mot de passe, ville, langue ; bio.
-- Design thème sombre dédié (couleurs fixes pour l’écran d’inscription).
-- **Bouton mode clair/sombre** dans l’AppBar.
-- Envoi via `UserRepository.register` ; après succès → redirection vers `/login`.
-- Chaînes et champs alignés avec l’API (voir `UserRepository.register` et modèles).
+### 7.7 SOS et accompagnement
 
-### Home (bénéficiaire – HomeTab)
+- **SOS** : écran alertes, appels repository (création, liste, proximité selon API).
+- **Contacts urgence** : `EmergencyContactsScreen` (`/accompagnants`).
+- **Transport** : `TransportRequestsScreen` (`/beneficiaires`) + repositories transport.
 
-- En-tête : logo/titre, recherche (placeholder).
-- Sections type : Services principaux (cartes), À proximité, Carte « Autour de vous ».
-- FAB ou bouton SOS (selon maquette) pour alerte.
-- Couleurs et cartes basées sur le thème (dark/light).
+### 7.8 Dossier médical
 
-### Home (accompagnant – HomeCompanionTab)
-
-- Utilisateurs suivis (liste horizontale), « Voir tout ».
-- Demandes d’assistance (cartes avec Accepter / Ignorer).
-- Mon planning (cartes date + libellé).
-- Ressources & Guide (cartes liens).
-- Même cohérence thème (surfaces, textes).
-
-### Profil (ProfileTab)
-
-- Photo, nom, badge « Utilisateur vérifié », date d’adhésion.
-- Cartes statistiques (ex. trajets assistés, note).
-- Blocs : Informations personnelles (e-mail, téléphone), Sécurité et support (Thème, Contacts d’urgence, Historique, Paramètres).
-- **Choix de thème** : dialogue Clair / Sombre / Système → `themeModeProvider.setThemeMode`.
-- Bouton Déconnexion → `logout` puis redirection.
-- Lien vers écran d’édition → `/profile-edit`.
-
-### ProfileScreen (édition)
-
-- Formulaire : nom, contact, ville, langue, types de handicap, bio.
-- Changement de photo → `UserRepository.updateProfileImage` (multipart).
-- Sauvegarde → `updateMe` puis `authStateProvider.refreshUser()`.
-
-### Mes accompagnants / Mes bénéficiaires
-
-- Listes issues de `getAccompagnants()` / `getBeneficiaires()`.
-- Ajout/retrait accompagnant via `updateAccompagnant` (action + accompagnantId).
+- `MedicalRecordScreen` — données alignées sur `GET/PATCH /medical-records/me`.
 
 ---
 
-## 9. Thème et accessibilité
+## 8. Thème et accessibilité UI
 
-> Comment le thème est appliqué et où sont définies les couleurs. Utile pour modifier le design ou l’accessibilité.
-
-### Thème
-
-- **Fichier** : `lib/core/theme/app_theme.dart`.
-- **Light** : primary bleu (#1976D2), surface claire, contraste lisible.
-- **Dark** : fond #000000, surface #1E1E1E, surfaceContainerHighest #2C2C2C, primary accent #5DDDF9, textes blancs/gris.
-- **Application** : `MaterialApp.router` dans `app.dart` avec `theme: AppTheme.light`, `darkTheme: AppTheme.dark`, `themeMode: ref.watch(themeModeProvider)` (persistant via `theme_provider.dart`).
-
-Les écrans Home et Profil utilisent `theme.colorScheme` (surface, onSurface, etc.) pour respecter le dark mode. L’écran d’inscription utilise un design sombre fixe (couleurs dédiées dans `register_screen.dart`).
-
-### Accessibilité
-
-- Contraste : ratios WCAG 4.5:1 visés.
-- **Semantics** : labels sur les éléments clés (logo, boutons, champs) pour TalkBack / VoiceOver.
-- Cibles tactiles : minimum 44×44 points (widgets dédiés si besoin).
-- Support du redimensionnement des polices système.
-- RTL : pris en charge pour l’arabe selon `preferredLanguage` et locale.
+- Thèmes clair / sombre dans `core/theme/`.
+- Taille de texte et contrastes : suivre Material et les réglages système.
+- `ReadAloudButton` et composants similaires pour la lecture des contenus.
 
 ---
 
-## 10. Localisation
+## 9. Assets
 
-> Où sont les textes FR/AR et comment ajouter une nouvelle chaîne.
-
-- **Fichiers** : `lib/l10n/app_fr.arb`, `app_ar.arb` ; config `l10n.yaml` (template `app_fr.arb`, output `app_localizations.dart`).
-- **Classe manuelle** : `lib/core/l10n/app_strings.dart` — `AppStrings.fr()`, `AppStrings.ar()`, `AppStrings.fromPreferredLanguage(user.preferredLanguage?.name)` pour les écrans qui s’appuient sur la langue utilisateur.
-- Utilisation : mélange de `AppLocalizations.of(context)` (généré) et `AppStrings` selon les écrans.
+Déclarés dans `pubspec.yaml` : `assets/images/`, `animations/`, `videos/`, `models/` (TFLite), polices `NotoSansSymbols2`.
 
 ---
 
-## 11. Installation et exécution
+## 10. Tests
 
-### Prérequis
-
-- Flutter (SDK ^3.10, dernière stable recommandée).
-- Backend API Ma3ak démarré (ex. `http://localhost:3000` ou URL définie).
-- Pour Google Sign-In : projet Google Cloud, identifiants OAuth 2.0 (Android/iOS), configuration backend.
-
-### Commandes
-
-```bash
-# Dépendances
-flutter pub get
-
-# Lancer (défaut : localhost ou 10.0.2.2 sur Android)
-flutter run
-
-# Avec URL API personnalisée
-flutter run --dart-define=API_BASE_URL=https://ton-api.example.com
-
-# Émulateur Android vers API sur la machine hôte
-flutter run -d android --dart-define=API_BASE_URL=http://10.0.2.2:3000
-```
-
-### Build
-
-```bash
-flutter build apk
-flutter build ios
-flutter build web
-```
+- `test/` — exemple `widget_test.dart` ; étendre avec tests des repositories mockés si besoin.
 
 ---
 
-## 12. Tests et qualité
+## 11. Projet jumeau à la racine
 
-- **Tests** : `flutter test` (ex. `test/user_model_test.dart`, `widget_test.dart`).
-- **Lints** : `flutter_lints` dans `pubspec.yaml` ; `analysis_options.yaml` pour les règles d’analyse.
-
----
-
-## 13. Comment contribuer
-
-> Recommandations pour que les collègues puissent contribuer de façon cohérente.
-
-1. **Avant de coder**
-   - Vérifier que l’API backend est accessible (URL dans [Configuration](#4-configuration-et-environnement)).
-   - Lire la section [Architecture](#3-architecture-et-structure-du-projet) pour placer le code au bon endroit.
-
-2. **Conventions**
-   - **Nouvel écran** : dans `lib/features/<nom_feature>/screens/`.
-   - **Nouvelle route** : ajouter dans `lib/router/app_router.dart` et documenter dans ce README (section 7).
-   - **Nouvelle chaîne UI** : ajouter dans `lib/core/l10n/app_strings.dart` (FR/AR) et/ou dans les `.arb`.
-   - **Nouvel endpoint** : constante dans `lib/data/api/endpoints.dart`, appel dans le repository concerné.
-
-3. **État (Riverpod)**
-   - État global (auth, thème) : dans `lib/providers/`.
-   - État local à un écran : `StatefulWidget` ou `ConsumerStatefulWidget` avec `setState` / ref.
-
-4. **Après modification**
-   - Lancer `flutter analyze` (ou l’analyse IDE).
-   - Tester sur un émulateur ou un appareil (auth, changement de thème, navigation).
-
-5. **Partage**
-   - Mettre à jour ce README si vous ajoutez une route, un provider ou une config importante.
-   - Documenter les décisions importantes (ex. pourquoi un écran a un thème fixe) en commentaire dans le code ou dans le README.
+Le dépôt peut contenir un autre dossier Flutter `appm3ak/` à la racine (copie ou variante). **La copie décrite ici comme référence active est** `frontend/appm3ak/appm3ak/`. Vérifier quel module votre équipe build avant release.
 
 ---
 
-## Résumé — Où trouver quoi
+## 12. Références
 
-| Besoin | Fichier / dossier |
-|--------|-------------------|
-| Changer l’URL de l’API | `lib/core/config/`, `--dart-define=API_BASE_URL=...` |
-| Modifier les couleurs (light/dark) | `lib/core/theme/app_theme.dart` |
-| Ajouter une route | `lib/router/app_router.dart` |
-| Modifier le flux login/logout | `lib/providers/auth_providers.dart`, `lib/features/auth/screens/login_screen.dart` |
-| Modifier l’inscription | `lib/features/auth/screens/register_screen.dart`, `lib/data/repositories/user_repository.dart` |
-| Modifier l’accueil (bénéficiaire) | `lib/features/home/screens/home_tab.dart` |
-| Modifier l’accueil (accompagnant) | `lib/features/home/screens/home_companion_tab.dart` |
-| Modifier le profil | `lib/features/profile/screens/profile_tab.dart`, `profile_screen.dart` |
-| Ajouter un texte FR/AR | `lib/core/l10n/app_strings.dart` et/ou `lib/l10n/app_*.arb` |
-| Modifier les endpoints API | `lib/data/api/endpoints.dart`, `lib/data/repositories/` |
+- Backend : `backend/backend-m3ak 2/README.md`
+- Swagger backend : `http://<host>:3000/api`
 
 ---
 
-**Projet Ma3ak — Documentation à jour pour partage avec l’équipe.**
+## Licence
+
+Alignée sur le dépôt parent (souvent MIT côté backend ; vérifier le fichier LICENSE à la racine).

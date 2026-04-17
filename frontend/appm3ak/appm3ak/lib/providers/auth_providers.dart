@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/config/app_config.dart';
 import '../data/models/user_model.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/user_repository.dart';
@@ -34,6 +35,12 @@ class AuthStateNotifier extends StateNotifier<AsyncValue<UserModel?>> {
   final UserRepository _userRepo;
 
   Future<void> _checkAuth() async {
+    // Mode démo : ne jamais auto‑connecter.
+    if (AppConfig.forceLoginOnStart) {
+      await _authRepo.logout();
+      state = const AsyncValue.data(null);
+      return;
+    }
     final hasToken = await _authRepo.hasStoredToken();
     if (!hasToken) {
       state = const AsyncValue.data(null);

@@ -1,16 +1,16 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:image_picker/image_picker.dart';
 
 import '../api/api_client.dart';
 import '../api/endpoints.dart';
 import '../../core/config/app_config.dart';
 import '../models/comment_model.dart';
+import '../models/community_action_plan_result.dart';
 import '../models/flash_summary_model.dart';
+import '../models/create_help_request_input.dart';
+import '../models/create_post_input.dart';
 import '../models/help_request_model.dart';
 import '../models/post_model.dart';
-import '../models/simplified_text_model.dart';
-import '../models/image_vision_description_model.dart';
 
 /// Repository pour gérer les posts et demandes d'aide de la communauté.
 class CommunityRepository {
@@ -18,57 +18,6 @@ class CommunityRepository {
 
   final ApiClient _api;
 
-  // ---- In-memory cache (per app lifetime) ----
-  // But: éviter de recalculer côté serveur si l'utilisateur reclic / reouvre.
-  final Map<String, Future<SimplifiedTextModel>> _simplifyTextInFlight = {};
-  final Map<String, SimplifiedTextModel> _simplifyTextCache = {};
-  final Map<String, Future<ImageVisionDescription>> _imageDescInFlight = {};
-  final Map<String, ImageVisionDescription> _imageDescCache = {};
-
-  String _simplifyCacheKey({
-    required String text,
-    required String level,
-  }) {
-    final t = text.trim();
-    // La clé ne stocke pas tout le texte pour garder la mémoire légère.
-    return '$level|${t.length}|${t.hashCode}';
-  }
-
-  String _imageDescCacheKey({
-    required String postId,
-    required int imageIndex,
-  }) =>
-      '$postId|$imageIndex';
-
-  /// Ollama (FALC + vision) : le backend attend le LLM ; 1ʳᵉ charge LLaVA peut dépasser 5–15 min (CPU).
-  /// Sur **web**, un `connectTimeout` trop court fait un [DioExceptionType.connectionTimeout] alors que le serveur calcule encore.
-  static Options _ollamaDioOptions() {
-    const longWait = Duration(minutes: 45);
-    if (kIsWeb) {
-      return Options(
-        connectTimeout: longWait,
-        sendTimeout: const Duration(minutes: 5),
-        receiveTimeout: longWait,
-      );
-    }
-    return Options(
-      connectTimeout: const Duration(minutes: 15),
-      sendTimeout: const Duration(minutes: 5),
-      receiveTimeout: longWait,
-    );
-  }
-
-  /// GET `/community/vision/capabilities` — flags Gemini + Ollama + ping (via [CommunityVisionService]).
-  Future<Map<String, dynamic>> getCommunityVisionCapabilities() async {
-    final response = await _api.dio.get(Endpoints.communityVisionCapabilities);
-    final data = response.data;
-    if (data is Map<String, dynamic>) return data;
-    return Map<String, dynamic>.from(data as Map);
-  }
-
-  /// @deprecated Utiliser [getCommunityVisionCapabilities].
-  Future<Map<String, dynamic>> getAccessibilityFeatures() =>
-      getCommunityVisionCapabilities();
 
   /// URL d’une image stockée côté API (`uploads/post-….jpg`).
   /// Normalise les séparateurs (évite les 404 si le chemin contient des `\` côté serveur).
@@ -97,6 +46,16 @@ class CommunityRepository {
     return '$base/$clean';
   }
 
+  static Map<String, dynamic> _normalizeHelpRequestJson(
+    Map<String, dynamic> json,
+  ) {
+    final m = Map<String, dynamic>.from(json);
+    if (m['id'] == null && m['_id'] != null) {
+      m['id'] = m['_id'].toString();
+    }
+    return m;
+  }
+
   static Map<String, dynamic> _normalizePostJson(Map<String, dynamic> json) {
     final m = Map<String, dynamic>.from(json);
     if (m['id'] == null && m['_id'] != null) {
@@ -107,16 +66,66 @@ class CommunityRepository {
 
   // ========== POSTS ==========
 
-  /// Crée un nouveau post (multipart : `contenu`, `type`, fichiers `images` optionnels).
-  Future<PostModel> createPost({
-    required String contenu,
-    required String type,
-    List<XFile>? images,
+  /// IA: pré-remplir un plan d'action communauté (post ou demande d'aide).
+  Future<CommunityActionPlanResult> getCommunityActionPlan({
+    required String text,
+    String? contextHint,
+    String? inputModeHint,
+    bool? isForAnotherPersonHint,
   }) async {
-    final formData = FormData();
-    formData.fields.add(MapEntry('contenu', contenu));
-    formData.fields.add(MapEntry('type', type));
+    final response = await _api.dio.post(
+      Endpoints.communityAiActionPlan,
+      data: {
+        'text': text,
+        if (contextHint != null && contextHint.trim().isNotEmpty)
+          'contextHint': contextHint.trim(),
+        if (inputModeHint != null && inputModeHint.trim().isNotEmpty)
+          'inputModeHint': inputModeHint.trim(),
+        ...?isForAnotherPersonHint == null
+            ? null
+            : {'isForAnotherPersonHint': isForAnotherPersonHint},
+      },
+    );
+    return CommunityActionPlanResult.fromJson(
+      response.data as Map<String, dynamic>,
+    );
+  }
 
+  /// Crée un nouveau post (multipart : champs hérités + inclusifs optionnels).
+  Future<PostModel> createPost(CreatePostInput input) async {
+    final formData = FormData();
+    formData.fields.add(MapEntry('contenu', input.contenu));
+    formData.fields.add(MapEntry('type', input.type));
+    if (input.latitude != null) {
+      formData.fields.add(MapEntry('latitude', '${input.latitude}'));
+    }
+    if (input.longitude != null) {
+      formData.fields.add(MapEntry('longitude', '${input.longitude}'));
+    }
+    if (input.dangerLevel != null && input.dangerLevel!.isNotEmpty) {
+      formData.fields.add(MapEntry('dangerLevel', input.dangerLevel!));
+    }
+
+    void putIfNonNull(String key, Object? v) {
+      if (v == null) return;
+      if (v is bool) {
+        formData.fields.add(MapEntry(key, v ? 'true' : 'false'));
+      } else {
+        formData.fields.add(MapEntry(key, '$v'));
+      }
+    }
+
+    putIfNonNull('postNature', input.postNature);
+    putIfNonNull('targetAudience', input.targetAudience);
+    putIfNonNull('inputMode', input.inputMode);
+    putIfNonNull('isForAnotherPerson', input.isForAnotherPerson);
+    putIfNonNull('needsAudioGuidance', input.needsAudioGuidance);
+    putIfNonNull('needsVisualSupport', input.needsVisualSupport);
+    putIfNonNull('needsPhysicalAssistance', input.needsPhysicalAssistance);
+    putIfNonNull('needsSimpleLanguage', input.needsSimpleLanguage);
+    putIfNonNull('locationSharingMode', input.locationSharingMode);
+
+    final images = input.images;
     if (images != null) {
       for (final x in images) {
         if (kIsWeb) {
@@ -148,6 +157,17 @@ class CommunityRepository {
     );
     return PostModel.fromJson(
       _normalizePostJson(response.data as Map<String, dynamic>),
+    );
+  }
+
+  /// Vote communautaire : obstacle toujours présent (`confirm: true`) ou non.
+  Future<void> validatePostObstacle({
+    required String postId,
+    required bool confirm,
+  }) async {
+    await _api.dio.post(
+      Endpoints.communityPostValidateObstacle(postId),
+      data: {'confirm': confirm},
     );
   }
 
@@ -219,42 +239,6 @@ class CommunityRepository {
     );
   }
 
-  /// Analyse image (LLaVA/Ollama si configuré) + texte pour TTS — handicap visuel.
-  Future<ImageVisionDescription> getPostImageAccessibilityDescription({
-    required String postId,
-    required int imageIndex,
-  }) async {
-    final key = _imageDescCacheKey(postId: postId, imageIndex: imageIndex);
-
-    final cached = _imageDescCache[key];
-    if (cached != null) return cached;
-
-    final inFlight = _imageDescInFlight[key];
-    if (inFlight != null) return inFlight;
-
-    final future = () async {
-      final response = await _api.dio.get(
-        Endpoints.communityPostImageAudio(postId, imageIndex),
-        options: _ollamaDioOptions(),
-      );
-      return ImageVisionDescription.fromJson(
-        response.data as Map<String, dynamic>,
-      );
-    }();
-
-    _imageDescInFlight[key] = future;
-    try {
-      final result = await future;
-      _imageDescCache[key] = result;
-      return result;
-    } finally {
-      // Retirer la requête en cours uniquement si on pointe toujours dessus.
-      if (identical(_imageDescInFlight[key], future)) {
-        _imageDescInFlight.remove(key);
-      }
-    }
-  }
-
   /// Récupère un post par son ID.
   Future<PostModel> getPostById(String id) async {
     final response = await _api.dio.get(Endpoints.communityPostById(id));
@@ -294,75 +278,39 @@ class CommunityRepository {
     return FlashSummaryModel.fromJson(response.data as Map<String, dynamic>);
   }
 
-  // ========== ACCESSIBILITE / IA ==========
-
-  /// Simplifie un texte en FALC (Facile à Lire et à Comprendre).
-  Future<SimplifiedTextModel> simplifyText({
-    required String text,
-    String level = 'facile',
-  }) async {
-    final cleaned = text.trim();
-    if (cleaned.isEmpty) {
-      return SimplifiedTextModel(
-        simplifiedText: '',
-        keyPoints: const [],
-        level: level,
-        originalWordCount: 0,
-        simplifiedWordCount: 0,
-      );
-    }
-
-    final key = _simplifyCacheKey(text: cleaned, level: level);
-
-    final cached = _simplifyTextCache[key];
-    if (cached != null) return cached;
-
-    final inFlight = _simplifyTextInFlight[key];
-    if (inFlight != null) return inFlight;
-
-    final future = () async {
-      final response = await _api.dio.post(
-        Endpoints.communityVisionSimplifyText,
-        data: {
-          'text': cleaned,
-          'level': level,
-        },
-        options: _ollamaDioOptions(),
-      );
-      return SimplifiedTextModel.fromJson(
-        response.data as Map<String, dynamic>,
-      );
-    }();
-
-    _simplifyTextInFlight[key] = future;
-    try {
-      final result = await future;
-      _simplifyTextCache[key] = result;
-      return result;
-    } finally {
-      if (identical(_simplifyTextInFlight[key], future)) {
-        _simplifyTextInFlight.remove(key);
-      }
-    }
-  }
-
   // ========== HELP REQUESTS ==========
 
-  /// Crée une nouvelle demande d'aide.
-  Future<HelpRequestModel> createHelpRequest({
-    required String description,
-    required double latitude,
-    required double longitude,
-  }) async {
+  /// Crée une nouvelle demande d'aide (champs inclusifs optionnels, alignés backend).
+  Future<HelpRequestModel> createHelpRequest(CreateHelpRequestInput input) async {
+    final data = <String, dynamic>{
+      'latitude': input.latitude,
+      'longitude': input.longitude,
+    };
+    final d = input.description?.trim();
+    if (d != null && d.isNotEmpty) {
+      data['description'] = d;
+    }
+    void putIfNonNull(String key, Object? v) {
+      if (v != null) data[key] = v;
+    }
+
+    putIfNonNull('helpType', input.helpType);
+    putIfNonNull('inputMode', input.inputMode);
+    putIfNonNull('requesterProfile', input.requesterProfile);
+    putIfNonNull('needsAudioGuidance', input.needsAudioGuidance);
+    putIfNonNull('needsVisualSupport', input.needsVisualSupport);
+    putIfNonNull('needsPhysicalAssistance', input.needsPhysicalAssistance);
+    putIfNonNull('needsSimpleLanguage', input.needsSimpleLanguage);
+    putIfNonNull('isForAnotherPerson', input.isForAnotherPerson);
+    putIfNonNull('presetMessageKey', input.presetMessageKey);
+
     final response = await _api.dio.post(
       Endpoints.communityHelpRequests,
-      data: {
-        'description': description,
-        'latitude': latitude,
-        'longitude': longitude,
-      },
+      data: data,
     );
-    return HelpRequestModel.fromJson(response.data as Map<String, dynamic>);
+    return HelpRequestModel.fromJson(
+      _normalizeHelpRequestJson(response.data as Map<String, dynamic>),
+    );
   }
 
   /// Récupère la liste des demandes d'aide (avec pagination).
@@ -385,7 +333,11 @@ class CommunityRepository {
     final data = response.data as Map<String, dynamic>;
     final requestsList = data['data'] as List;
     final requests = requestsList
-        .map((json) => HelpRequestModel.fromJson(json as Map<String, dynamic>))
+        .map(
+          (json) => HelpRequestModel.fromJson(
+            _normalizeHelpRequestJson(json as Map<String, dynamic>),
+          ),
+        )
         .toList();
     return (
       requests: requests,
@@ -404,7 +356,9 @@ class CommunityRepository {
       Endpoints.communityHelpRequestStatut(id),
       data: {'statut': statut},
     );
-    return HelpRequestModel.fromJson(response.data as Map<String, dynamic>);
+    return HelpRequestModel.fromJson(
+      _normalizeHelpRequestJson(response.data as Map<String, dynamic>),
+    );
   }
 
   /// Accepte une demande d'aide (Matching).
@@ -415,7 +369,50 @@ class CommunityRepository {
       Endpoints.communityHelpRequestAccept(id),
       data: {},
     );
-    return HelpRequestModel.fromJson(response.data as Map<String, dynamic>);
+    return HelpRequestModel.fromJson(
+      _normalizeHelpRequestJson(response.data as Map<String, dynamic>),
+    );
+  }
+
+  // ========== MERCI / MODÉRATION ==========
+
+  /// État « Merci » pour l’utilisateur connecté.
+  Future<({bool thankReceivedFromMe, int merciCount})> getPostMerciState(
+    String postId,
+  ) async {
+    final response = await _api.dio.get(
+      Endpoints.communityPostMerciState(postId),
+    );
+    final data = response.data as Map<String, dynamic>;
+    return (
+      thankReceivedFromMe: data['thankReceivedFromMe'] as bool? ?? false,
+      merciCount: (data['merciCount'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// Toggle « Merci » (remerciement communautaire).
+  Future<
+      ({
+        bool thankReceivedFromMe,
+        int merciCount,
+        PostModel post,
+      })> togglePostMerci(String postId) async {
+    final response = await _api.dio.post(Endpoints.communityPostMerci(postId));
+    final data = response.data as Map<String, dynamic>;
+    final rawPost = data['post'];
+    final postMap = rawPost is Map<String, dynamic>
+        ? rawPost
+        : <String, dynamic>{};
+    return (
+      thankReceivedFromMe: data['thankReceivedFromMe'] as bool? ?? false,
+      merciCount: (data['merciCount'] as num?)?.toInt() ?? 0,
+      post: PostModel.fromJson(_normalizePostJson(postMap)),
+    );
+  }
+
+  /// Suppression modération (admin uniquement).
+  Future<void> deletePostAdmin(String postId) async {
+    await _api.dio.delete(Endpoints.communityPostById(postId));
   }
 }
 

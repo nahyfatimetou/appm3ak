@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
@@ -834,7 +834,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
-                                '${match.personName}',
+                                match.personName,
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 12,

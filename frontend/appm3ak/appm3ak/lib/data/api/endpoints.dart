@@ -11,6 +11,8 @@ class Endpoints {
   static const String userRegister = '/user/register';
   static const String userMe = '/user/me';
   static const String userMePhoto = '/user/me/photo';
+  static String userSearch(String query, [int limit = 10]) =>
+      '/user/search?query=${Uri.encodeComponent(query)}&limit=$limit';
 
   // ——— Dossier médical (HANDICAPE) ———
   static const String medicalRecords = '/medical-records';
@@ -21,11 +23,19 @@ class Endpoints {
   static const String sosAlertsMe = '/sos-alerts/me';
   static String sosAlertsNearby(double lat, double lng) =>
       '/sos-alerts/nearby?latitude=$lat&longitude=$lng';
+  static String sosAlertRespond(String id) => '/sos-alerts/$id/respond';
 
   // ——— Contacts urgence ———
   static const String emergencyContacts = '/emergency-contacts';
   static const String emergencyContactsMe = '/emergency-contacts/me';
+  static const String emergencyContactsMeProximity =
+      '/emergency-contacts/me/proximity';
+  static const String emergencyContactsInvite = '/emergency-contacts/invite';
   static String emergencyContactId(String id) => '/emergency-contacts/$id';
+
+  // ——— Location (Proches) ———
+  static const String locationUpdate = '/location/update';
+  static const String locationMe = '/location/me';
 
   // ——— Transport ———
   static const String transport = '/transport';
@@ -61,25 +71,33 @@ class Endpoints {
   static const String communityPosts = '/community/posts';
   static const String communityPostsForMe = '/community/posts/for-me';
   static String communityPostById(String id) => '/community/posts/$id';
-  static String communityPostImageAudio(String postId, int imageIndex) =>
-      '/community/posts/$postId/images/$imageIndex/audio-description';
+  static String communityPostMerci(String postId) =>
+      '/community/posts/$postId/merci';
+  static String communityPostMerciState(String postId) =>
+      '/community/posts/$postId/merci-state';
+  static String communityPostValidateObstacle(String postId) =>
+      '/community/posts/$postId/validate-obstacle';
   static String communityPostComments(String postId) =>
       '/community/posts/$postId/comments';
   static String communityPostCommentsFlashSummary(String postId) =>
       '/community/posts/$postId/comments/flash-summary';
+  static const String communityAiActionPlan = '/community/ai/action-plan';
+
+  // ——— IA communauté (optionnel — à brancher côté Nest) ———
+  static const String aiCommunitySummarizePost = '/ai/community/summarize-post';
+  static const String aiCommunitySummarizeComments =
+      '/ai/community/summarize-comments';
+  static const String aiCommunityPostToHelpRequest =
+      '/ai/community/post-to-help-request';
+
   static const String communityHelpRequests = '/community/help-requests';
   static String communityHelpRequestStatut(String id) =>
       '/community/help-requests/$id/statut';
   static String communityHelpRequestAccept(String id) =>
       '/community/help-requests/$id/accept';
 
-  /// IA posts (FALC + ping Ollama/Gemini) — préféré au préfixe `/accessibility/*`.
-  static const String communityVisionCapabilities = '/community/vision/capabilities';
-  static const String communityVisionSimplifyText = '/community/vision/simplify-text';
-
-  // ——— Accessibilité / IA (alias historiques, même backend) ———
+  // ——— Accessibilité (diagnostic serveur Ollama) ———
   static const String accessibilityFeatures = '/accessibility/features';
-  static const String accessibilitySimplifyText = '/accessibility/simplify-text';
 
   // ——— Éducation ———
   static const String educationModules = '/education/modules';
@@ -90,4 +108,10 @@ class Endpoints {
   static const String notifications = '/notifications';
   static String notificationRead(String id) => '/notifications/$id/read';
   static const String notificationsReadAll = '/notifications/read-all';
+
+  // ——— Surveillance (Proches) ———
+  static const String surveillanceStart = '/surveillance/start';
+  static const String surveillanceConfirm = '/surveillance/confirm';
+  static const String surveillanceCancel = '/surveillance/cancel';
+  static const String surveillanceStatus = '/surveillance/status';
 }

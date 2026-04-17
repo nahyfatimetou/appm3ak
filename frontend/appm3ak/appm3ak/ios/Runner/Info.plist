@@ -51,5 +51,7 @@
 	<string>L'application utilise le microphone pour les commandes vocales et l'accessibilité.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>L'application utilise la reconnaissance vocale pour les commandes d'accessibilité.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>La position est utilisée pour les demandes d'aide et les lieux à proximité.</string>
 </dict>
 </plist>

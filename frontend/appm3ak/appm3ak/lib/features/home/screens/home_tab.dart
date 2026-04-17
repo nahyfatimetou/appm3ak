@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -112,10 +113,50 @@ class HomeTab extends ConsumerWidget {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 16),
+                    Semantics(
+                      button: true,
+                      label:
+                          '${strings.community}. ${strings.communityHubHomeCardSubtitle}',
+                      child: _CommunityHubHomeCard(
+                        strings: strings,
+                        primary: primary,
+                        onTap: () => context.push('/community-ai-entry'),
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
+            if (kIsWeb)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                  child: Material(
+                    color: primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(Icons.mic, color: primary, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Navigation vocale : touchez le micro « Vocal » en bas à droite, puis parlez (Chrome demandera l’accès au micro).',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             const SliverToBoxAdapter(child: SizedBox(height: 24)),
             // Services Principaux
             SliverToBoxAdapter(
@@ -166,7 +207,7 @@ class HomeTab extends ConsumerWidget {
                     icon: Icons.map_outlined,
                     label: strings.accessibilityCard,
                     primary: primary,
-                    onTap: () => context.push('/community-posts'),
+                    onTap: () => context.push('/community-ai-entry'),
                   ),
                   _ServiceCard(
                     icon: Icons.school_outlined,
@@ -326,6 +367,79 @@ class HomeTab extends ConsumerWidget {
             ),
             const SliverToBoxAdapter(child: SizedBox(height: 32)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Entrée rapide vers [CommunityMainScreen] (même route que la carte accessibilité).
+class _CommunityHubHomeCard extends StatelessWidget {
+  const _CommunityHubHomeCard({
+    required this.strings,
+    required this.primary,
+    required this.onTap,
+  });
+
+  final AppStrings strings;
+  final Color primary;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: primary.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(16),
+      elevation: 0,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: primary.withValues(alpha: 0.35)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+            child: Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: primary.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(Icons.groups_rounded, color: primary, size: 28),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        strings.community,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        strings.communityHubHomeCardSubtitle,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: primary, size: 28),
+              ],
+            ),
+          ),
         ),
       ),
     );

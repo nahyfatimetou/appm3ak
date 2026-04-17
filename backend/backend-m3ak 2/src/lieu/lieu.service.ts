@@ -8,6 +8,74 @@ import { CreateLieuDto } from './dto/create-lieu.dto';
 export class LieuService {
   constructor(@InjectModel(Lieu.name) private lieuModel: Model<LieuDocument>) {}
 
+  async upsertFromCommunitySignal(input: {
+    nom: string;
+    adresse: string;
+    latitude: number;
+    longitude: number;
+    typeLieu?: string;
+    riskLevel: 'safe' | 'caution' | 'danger';
+    verificationStatus: 'auto' | 'pending' | 'verified' | 'rejected';
+    obstaclePresent: boolean;
+    aiConfidence: number;
+    aiSummary: string;
+    sourcePostId: string;
+  }) {
+    const nearby = await this.findNearby(input.latitude, input.longitude, 80);
+    const existing = nearby[0];
+
+    if (existing) {
+      return this.lieuModel
+        .findByIdAndUpdate(
+          existing._id,
+          {
+            $set: {
+              nom: existing.nom || input.nom,
+              adresse: existing.adresse || input.adresse,
+              typeLieu: input.typeLieu ?? existing.typeLieu ?? 'OTHER',
+              riskLevel: input.riskLevel,
+              verificationStatus: input.verificationStatus,
+              obstaclePresent: input.obstaclePresent,
+              aiConfidence: input.aiConfidence,
+              aiSummary: input.aiSummary,
+              sourcePostId: input.sourcePostId,
+              lastReportedAt: new Date(),
+              latitude: input.latitude,
+              longitude: input.longitude,
+              location: {
+                type: 'Point',
+                coordinates: [input.longitude, input.latitude],
+              },
+            },
+          },
+          { new: true },
+        )
+        .exec();
+    }
+
+    return this.lieuModel.create({
+      nom: input.nom,
+      adresse: input.adresse,
+      typeLieu: input.typeLieu ?? 'OTHER',
+      latitude: input.latitude,
+      longitude: input.longitude,
+      location: {
+        type: 'Point',
+        coordinates: [input.longitude, input.latitude],
+      },
+      description: input.aiSummary,
+      scoreAccessibilite: input.riskLevel === 'danger' ? 20 : 60,
+      riskLevel: input.riskLevel,
+      verificationStatus: input.verificationStatus,
+      obstaclePresent: input.obstaclePresent,
+      aiConfidence: input.aiConfidence,
+      aiSummary: input.aiSummary,
+      sourcePostId: input.sourcePostId,
+      lastReportedAt: new Date(),
+      images: [],
+    });
+  }
+
   async create(dto: CreateLieuDto, imagePaths: string[] = []) {
     const images = imagePaths.length ? imagePaths : dto.images ?? [];
     return this.lieuModel.create({
@@ -36,7 +104,7 @@ export class LieuService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  async findNearby(latitude: number, longitude: number, maxDistanceMeters = 5000) {
+  async findNearby(latitude: number, longitude: number, maxDistanceMeters = 50_000) {
     return this.lieuModel
       .find({
         location: {

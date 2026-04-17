@@ -19,6 +19,7 @@ import { NotificationModule } from './notification/notification.module';
 import { AccessibilityModule } from './accessibility/accessibility.module';
 import { M3akLearningModule } from './m3ak-learning/m3ak-learning.module';
 import { M3akGuidanceModule } from './m3ak-guidance/m3ak-guidance.module';
+import { HelpPriorityModule } from './help-priority/help-priority.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { M3akGuidanceModule } from './m3ak-guidance/m3ak-guidance.module';
     AccessibilityModule,
     M3akLearningModule,
     M3akGuidanceModule,
+    HelpPriorityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

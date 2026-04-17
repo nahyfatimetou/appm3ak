@@ -1,16 +1,17 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/location/current_position.dart';
 import '../../../core/l10n/app_strings.dart';
 import '../../../data/models/location_model.dart';
 import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
-import '../../../data/repositories/location_repository.dart';
 
 /// Écran de soumission d'un nouveau lieu accessible.
 class SubmitLocationScreen extends ConsumerStatefulWidget {
@@ -33,6 +34,10 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
   LocationCategory _selectedCategory = LocationCategory.other;
   List<File> _selectedImages = [];
   final ImagePicker _imagePicker = ImagePicker();
+  bool _useCurrentLocation = false;
+  bool _loadingLocation = false;
+  double? _latitude;
+  double? _longitude;
 
   @override
   void dispose() {
@@ -47,12 +52,10 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
 
   Future<void> _pickImages() async {
     final images = await _imagePicker.pickMultiImage();
-    if (images != null) {
-      setState(() {
-        _selectedImages = images.map((img) => File(img.path)).toList();
-      });
+    setState(() {
+      _selectedImages = images.map((img) => File(img.path)).toList();
+    });
     }
-  }
 
   Future<void> _pickImageFromCamera() async {
     final image = await _imagePicker.pickImage(source: ImageSource.camera);
@@ -63,10 +66,36 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
     }
   }
 
+  Future<void> _fetchCurrentLocation(AppStrings strings) async {
+    if (kIsWeb) return;
+    setState(() => _loadingLocation = true);
+    try {
+      final pos = await getCurrentPositionOrNull();
+      if (!mounted) return;
+      if (pos == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.locationUnavailable)),
+        );
+        return;
+      }
+      setState(() {
+        _latitude = pos.latitude;
+        _longitude = pos.longitude;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(strings.locationUpdated)),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingLocation = false);
+    }
+  }
+
   Future<void> _submitLocation() async {
     if (!_formKey.currentState!.validate()) return;
 
     final user = ref.read(authStateProvider).valueOrNull;
+    final strings =
+        AppStrings.fromPreferredLanguage(user?.preferredLanguage?.name);
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(AppStrings.fr().errorGeneric)),
@@ -74,10 +103,16 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
       return;
     }
 
-    // Pour l'instant, on utilise des coordonnées par défaut (Tunis)
-    // TODO: Implémenter la géolocalisation
-    const defaultLat = 36.8065;
-    const defaultLng = 10.1815;
+    // Fallback Tunis si l'utilisateur ne veut pas joindre sa position.
+    const fallbackLat = 36.8065;
+    const fallbackLng = 10.1815;
+
+    if (_useCurrentLocation && (_latitude == null || _longitude == null)) {
+      await _fetchCurrentLocation(strings);
+      if (_latitude == null || _longitude == null) return;
+    }
+    final lat = _useCurrentLocation ? _latitude! : fallbackLat;
+    final lng = _useCurrentLocation ? _longitude! : fallbackLng;
 
     try {
       final repository = ref.read(locationRepositoryProvider);
@@ -86,8 +121,8 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
         categorie: _selectedCategory.toApiString(),
         adresse: _adresseController.text.trim(),
         ville: _villeController.text.trim(),
-        latitude: defaultLat,
-        longitude: defaultLng,
+        latitude: lat,
+        longitude: lng,
         description: _descriptionController.text.trim().isEmpty
             ? null
             : _descriptionController.text.trim(),
@@ -157,7 +192,6 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
     final strings =
         AppStrings.fromPreferredLanguage(user?.preferredLanguage?.name);
     final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -194,7 +228,7 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
             const SizedBox(height: 16),
             // Catégorie
             DropdownButtonFormField<LocationCategory>(
-              value: _selectedCategory,
+              initialValue: _selectedCategory,
               decoration: InputDecoration(
                 labelText: strings.category,
                 prefixIcon: const Icon(Icons.category),
@@ -227,6 +261,65 @@ class _SubmitLocationScreenState extends ConsumerState<SubmitLocationScreen> {
                 return null;
               },
             ),
+            if (!kIsWeb) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        value: _useCurrentLocation,
+                        onChanged: (v) async {
+                          setState(() => _useCurrentLocation = v);
+                          if (v && (_latitude == null || _longitude == null)) {
+                            await _fetchCurrentLocation(strings);
+                          }
+                        },
+                        title: Text(strings.useCurrentLocation),
+                        subtitle: Text(strings.locationHelpMessage),
+                      ),
+                      if (_useCurrentLocation) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed: _loadingLocation
+                                  ? null
+                                  : () => _fetchCurrentLocation(strings),
+                              icon: _loadingLocation
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.my_location),
+                              label: Text(strings.location),
+                            ),
+                            if (_latitude != null && _longitude != null)
+                              Chip(
+                                avatar: const Icon(
+                                  Icons.gps_fixed,
+                                  size: 18,
+                                ),
+                                label: Text(
+                                  '${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)}',
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             // Ville
             TextFormField(

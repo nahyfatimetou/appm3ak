@@ -556,7 +556,7 @@ class _HealthTabScreenState extends ConsumerState<HealthTabScreen> {
             else
               SliverList.separated(
                 itemCount: orderedMeds.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
                 itemBuilder: (context, i) {
                   final m = orderedMeds[i];
                   return Padding(

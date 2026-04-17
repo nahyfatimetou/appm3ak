@@ -38,6 +38,17 @@ export class SosAlertController {
     return this.sosAlertService.findNearby(parseFloat(latitude), parseFloat(longitude));
   }
 
+  @Post(':id/respond')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'M’y rendre — prendre l’alerte (statut EN_ROUTE)' })
+  async respond(
+    @Param('id') id: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    return this.sosAlertService.respondToAlert(id, user._id.toString());
+  }
+
   @Post(':id/statut')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

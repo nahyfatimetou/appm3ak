@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../accessibility/accessibility_post_prefs.dart';
 import '../../../core/l10n/app_strings.dart';
 import '../../../data/repositories/user_repository.dart';
 import '../../../providers/auth_providers.dart';
@@ -18,6 +19,15 @@ class ProfileTab extends ConsumerStatefulWidget {
 
 class _ProfileTabState extends ConsumerState<ProfileTab> {
   bool _isLoadingPhoto = false;
+  PostCreationShortcut? _postCreationShortcut;
+
+  @override
+  void initState() {
+    super.initState();
+    AccessibilityPostPrefs.getPostCreationShortcut().then((v) {
+      if (mounted) setState(() => _postCreationShortcut = v);
+    });
+  }
 
   void _showThemeDialog(BuildContext context, WidgetRef ref, AppStrings strings) {
     final notifier = ref.read(themeModeProvider.notifier);
@@ -283,6 +293,87 @@ class _ProfileTabState extends ConsumerState<ProfileTab> {
                     label: strings.phoneNumber,
                     value: user.contact,
                     onTap: () => context.push('/profile-edit'),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    strings.postShortcutSectionTitle,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: primary,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Accessibilité — raccourci + (vibrations fixes : onglet Demandes d’aide)',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  RadioListTile<PostCreationShortcut>(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(strings.postShortcutFormTitle),
+                    subtitle: Text(strings.postShortcutFormSubtitle),
+                    value: PostCreationShortcut.form,
+                    groupValue: _postCreationShortcut,
+                    onChanged: _postCreationShortcut == null
+                        ? null
+                        : (PostCreationShortcut? v) async {
+                            if (v == null) return;
+                            await AccessibilityPostPrefs.setPostCreationShortcut(v);
+                            if (mounted) {
+                              setState(() => _postCreationShortcut = v);
+                            }
+                          },
+                  ),
+                  RadioListTile<PostCreationShortcut>(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(strings.postShortcutHeadTitle),
+                    subtitle: Text(strings.postShortcutHeadSubtitle),
+                    value: PostCreationShortcut.headGesture,
+                    groupValue: _postCreationShortcut,
+                    onChanged: _postCreationShortcut == null
+                        ? null
+                        : (PostCreationShortcut? v) async {
+                            if (v == null) return;
+                            await AccessibilityPostPrefs.setPostCreationShortcut(v);
+                            if (mounted) {
+                              setState(() => _postCreationShortcut = v);
+                            }
+                          },
+                  ),
+                  RadioListTile<PostCreationShortcut>(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(strings.postShortcutVibrationTitle),
+                    subtitle: Text(strings.postShortcutVibrationSubtitle),
+                    value: PostCreationShortcut.vibration,
+                    groupValue: _postCreationShortcut,
+                    onChanged: _postCreationShortcut == null
+                        ? null
+                        : (PostCreationShortcut? v) async {
+                            if (v == null) return;
+                            await AccessibilityPostPrefs.setPostCreationShortcut(v);
+                            if (mounted) {
+                              setState(() => _postCreationShortcut = v);
+                            }
+                          },
+                  ),
+                  RadioListTile<PostCreationShortcut>(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(strings.postShortcutVoiceVibTitle),
+                    subtitle: Text(strings.postShortcutVoiceVibSubtitle),
+                    value: PostCreationShortcut.voiceVibration,
+                    groupValue: _postCreationShortcut,
+                    onChanged: _postCreationShortcut == null
+                        ? null
+                        : (PostCreationShortcut? v) async {
+                            if (v == null) return;
+                            await AccessibilityPostPrefs.setPostCreationShortcut(v);
+                            if (mounted) {
+                              setState(() => _postCreationShortcut = v);
+                            }
+                          },
                   ),
                   const SizedBox(height: 24),
                   // SÉCURITÉ ET SUPPORT

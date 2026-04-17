@@ -93,6 +93,11 @@ class LocationModel extends Equatable {
     this.submittedByName,
     this.createdAt,
     this.updatedAt,
+    this.scoreAccessibilite,
+    this.riskLevel,
+    this.verificationStatus,
+    this.aiSummary,
+    this.obstaclePresent = false,
   });
 
   factory LocationModel.fromJson(Map<String, dynamic> json) {
@@ -124,6 +129,12 @@ class LocationModel extends Equatable {
       updatedAt: json['updatedAt'] != null
           ? DateTime.tryParse(json['updatedAt'].toString())
           : null,
+      scoreAccessibilite: (json['scoreAccessibilite'] as num?)?.round() ??
+          (json['accessibilityScore'] as num?)?.round(),
+      riskLevel: json['riskLevel'] as String?,
+      verificationStatus: json['verificationStatus'] as String?,
+      aiSummary: json['aiSummary'] as String?,
+      obstaclePresent: json['obstaclePresent'] as bool? ?? false,
     );
   }
 
@@ -144,6 +155,12 @@ class LocationModel extends Equatable {
   final String? submittedByName;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  /// Score d’accessibilité communautaire (0–100), si fourni par l’API.
+  final int? scoreAccessibilite;
+  final String? riskLevel;
+  final String? verificationStatus;
+  final String? aiSummary;
+  final bool obstaclePresent;
 
   /// Adresse complète pour l'affichage.
   String get fullAddress => '$adresse, $ville';
@@ -169,6 +186,11 @@ class LocationModel extends Equatable {
         'submittedByName': submittedByName,
         'createdAt': createdAt?.toIso8601String(),
         'updatedAt': updatedAt?.toIso8601String(),
+        'scoreAccessibilite': scoreAccessibilite,
+        'riskLevel': riskLevel,
+        'verificationStatus': verificationStatus,
+        'aiSummary': aiSummary,
+        'obstaclePresent': obstaclePresent,
       };
 
   LocationModel copyWith({
@@ -189,6 +211,11 @@ class LocationModel extends Equatable {
     String? submittedByName,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? scoreAccessibilite,
+    String? riskLevel,
+    String? verificationStatus,
+    String? aiSummary,
+    bool? obstaclePresent,
   }) =>
       LocationModel(
         id: id ?? this.id,
@@ -208,6 +235,11 @@ class LocationModel extends Equatable {
         submittedByName: submittedByName ?? this.submittedByName,
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
+        scoreAccessibilite: scoreAccessibilite ?? this.scoreAccessibilite,
+        riskLevel: riskLevel ?? this.riskLevel,
+        verificationStatus: verificationStatus ?? this.verificationStatus,
+        aiSummary: aiSummary ?? this.aiSummary,
+        obstaclePresent: obstaclePresent ?? this.obstaclePresent,
       );
 
   @override
@@ -220,6 +252,11 @@ class LocationModel extends Equatable {
         latitude,
         longitude,
         statut,
+        scoreAccessibilite,
+        riskLevel,
+        verificationStatus,
+        aiSummary,
+        obstaclePresent,
       ];
 }
 

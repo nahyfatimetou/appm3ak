@@ -45,6 +45,26 @@ enum HelpRequestStatus {
   }
 }
 
+bool? _parseBool(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  if (v is String) {
+    final s = v.toLowerCase().trim();
+    if (s == 'true' || s == '1' || s == 'yes') return true;
+    if (s == 'false' || s == '0' || s == 'no') return false;
+  }
+  return null;
+}
+
+List<String>? _parseStringList(dynamic v) {
+  if (v == null) return null;
+  if (v is List) {
+    return v.map((e) => e.toString()).toList();
+  }
+  return null;
+}
+
 /// Modèle représentant une demande d'aide.
 class HelpRequestModel extends Equatable {
   const HelpRequestModel({
@@ -55,6 +75,19 @@ class HelpRequestModel extends Equatable {
     required this.longitude,
     this.statut = HelpRequestStatus.enAttente,
     this.urgencyScore,
+    this.priority,
+    this.priorityScore,
+    this.priorityReason,
+    this.prioritySignals,
+    this.helpType,
+    this.inputMode,
+    this.requesterProfile,
+    this.needsAudioGuidance,
+    this.needsVisualSupport,
+    this.needsPhysicalAssistance,
+    this.needsSimpleLanguage,
+    this.isForAnotherPerson,
+    this.presetMessageKey,
     this.acceptedBy,
     this.helperName,
     this.user,
@@ -75,14 +108,27 @@ class HelpRequestModel extends Equatable {
     }
 
     return HelpRequestModel(
-      id: json['id'] as String? ?? json['_id'] as String? ?? '',
+      id: json['id']?.toString() ?? json['_id']?.toString() ?? '',
       userId: userIdStr,
-      description: json['description'] as String? ?? '',
+      description: json['description']?.toString() ?? '',
       latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
       longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
       statut: HelpRequestStatus.fromString(json['statut']?.toString()) ??
           HelpRequestStatus.enAttente,
       urgencyScore: (json['urgencyScore'] as num?)?.toInt(),
+      priority: json['priority']?.toString(),
+      priorityScore: (json['priorityScore'] as num?)?.toDouble(),
+      priorityReason: json['priorityReason']?.toString(),
+      prioritySignals: _parseStringList(json['prioritySignals']),
+      helpType: json['helpType']?.toString(),
+      inputMode: json['inputMode']?.toString(),
+      requesterProfile: json['requesterProfile']?.toString(),
+      needsAudioGuidance: _parseBool(json['needsAudioGuidance']),
+      needsVisualSupport: _parseBool(json['needsVisualSupport']),
+      needsPhysicalAssistance: _parseBool(json['needsPhysicalAssistance']),
+      needsSimpleLanguage: _parseBool(json['needsSimpleLanguage']),
+      isForAnotherPerson: _parseBool(json['isForAnotherPerson']),
+      presetMessageKey: json['presetMessageKey']?.toString(),
       acceptedBy: (json['acceptedBy'] as String?) ??
           json['acceptedBy']?['_id']?.toString(),
       helperName: json['helperName'] as String?,
@@ -103,6 +149,20 @@ class HelpRequestModel extends Equatable {
   final double longitude;
   final HelpRequestStatus statut;
   final int? urgencyScore;
+  /// low | medium | high | critical (calculé côté serveur).
+  final String? priority;
+  final double? priorityScore;
+  final String? priorityReason;
+  final List<String>? prioritySignals;
+  final String? helpType;
+  final String? inputMode;
+  final String? requesterProfile;
+  final bool? needsAudioGuidance;
+  final bool? needsVisualSupport;
+  final bool? needsPhysicalAssistance;
+  final bool? needsSimpleLanguage;
+  final bool? isForAnotherPerson;
+  final String? presetMessageKey;
   final String? acceptedBy;
   final String? helperName;
   final UserModel? user; // Utilisateur qui a créé la demande (si populated)
@@ -111,6 +171,11 @@ class HelpRequestModel extends Equatable {
 
   /// Vérifie si la demande est ouverte (peut être acceptée).
   bool get isOpen => statut == HelpRequestStatus.enAttente;
+
+  /// Demande pour une tierce personne ou profil accompagnant (affichage liste/détail).
+  bool get isCaregiverRequest =>
+      isForAnotherPerson == true ||
+      (requesterProfile?.toLowerCase().trim() == 'caregiver');
 
   /// Nom de l'utilisateur (si disponible).
   String get userName => user?.displayName ?? 'Utilisateur';
@@ -123,6 +188,19 @@ class HelpRequestModel extends Equatable {
         'longitude': longitude,
         'statut': statut.toApiString(),
         'urgencyScore': urgencyScore,
+        'priority': priority,
+        'priorityScore': priorityScore,
+        'priorityReason': priorityReason,
+        'prioritySignals': prioritySignals,
+        'helpType': helpType,
+        'inputMode': inputMode,
+        'requesterProfile': requesterProfile,
+        'needsAudioGuidance': needsAudioGuidance,
+        'needsVisualSupport': needsVisualSupport,
+        'needsPhysicalAssistance': needsPhysicalAssistance,
+        'needsSimpleLanguage': needsSimpleLanguage,
+        'isForAnotherPerson': isForAnotherPerson,
+        'presetMessageKey': presetMessageKey,
         'acceptedBy': acceptedBy,
         'helperName': helperName,
         'createdAt': createdAt?.toIso8601String(),
@@ -137,6 +215,19 @@ class HelpRequestModel extends Equatable {
     double? longitude,
     HelpRequestStatus? statut,
     int? urgencyScore,
+    String? priority,
+    double? priorityScore,
+    String? priorityReason,
+    List<String>? prioritySignals,
+    String? helpType,
+    String? inputMode,
+    String? requesterProfile,
+    bool? needsAudioGuidance,
+    bool? needsVisualSupport,
+    bool? needsPhysicalAssistance,
+    bool? needsSimpleLanguage,
+    bool? isForAnotherPerson,
+    String? presetMessageKey,
     String? acceptedBy,
     String? helperName,
     UserModel? user,
@@ -151,6 +242,20 @@ class HelpRequestModel extends Equatable {
         longitude: longitude ?? this.longitude,
         statut: statut ?? this.statut,
         urgencyScore: urgencyScore ?? this.urgencyScore,
+        priority: priority ?? this.priority,
+        priorityScore: priorityScore ?? this.priorityScore,
+        priorityReason: priorityReason ?? this.priorityReason,
+        prioritySignals: prioritySignals ?? this.prioritySignals,
+        helpType: helpType ?? this.helpType,
+        inputMode: inputMode ?? this.inputMode,
+        requesterProfile: requesterProfile ?? this.requesterProfile,
+        needsAudioGuidance: needsAudioGuidance ?? this.needsAudioGuidance,
+        needsVisualSupport: needsVisualSupport ?? this.needsVisualSupport,
+        needsPhysicalAssistance:
+            needsPhysicalAssistance ?? this.needsPhysicalAssistance,
+        needsSimpleLanguage: needsSimpleLanguage ?? this.needsSimpleLanguage,
+        isForAnotherPerson: isForAnotherPerson ?? this.isForAnotherPerson,
+        presetMessageKey: presetMessageKey ?? this.presetMessageKey,
         acceptedBy: acceptedBy ?? this.acceptedBy,
         helperName: helperName ?? this.helperName,
         user: user ?? this.user,
@@ -167,8 +272,24 @@ class HelpRequestModel extends Equatable {
         longitude,
         statut,
         urgencyScore,
+        priority,
+        priorityScore,
+        priorityReason,
+        prioritySignals,
+        helpType,
+        inputMode,
+        requesterProfile,
+        needsAudioGuidance,
+        needsVisualSupport,
+        needsPhysicalAssistance,
+        needsSimpleLanguage,
+        isForAnotherPerson,
+        presetMessageKey,
         acceptedBy,
         helperName,
+        user,
+        createdAt,
+        updatedAt,
       ];
 }
 

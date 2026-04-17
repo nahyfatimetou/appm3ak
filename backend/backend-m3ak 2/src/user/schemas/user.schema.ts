@@ -79,6 +79,14 @@ export class User {
   @Prop({ type: String, default: 'ACTIF' })
   statut: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Compte partenaire (association, commerce labellisé) — badge « Partenaire »',
+    default: false,
+  })
+  @Prop({ type: Boolean, default: false })
+  partenaire: boolean;
+
   @ApiProperty({ description: 'Date de création' })
   createdAt?: Date;
 

@@ -73,4 +73,9 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   statut?: string;
+
+  @ApiPropertyOptional({ description: 'Badge partenaire (compte institutionnel labellisé)' })
+  @IsOptional()
+  @IsBoolean()
+  partenaire?: boolean;
 }

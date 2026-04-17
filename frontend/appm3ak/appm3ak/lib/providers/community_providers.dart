@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../data/models/comment_model.dart';
+import '../data/models/community_action_plan_result.dart';
+import '../data/models/create_help_request_input.dart';
+import '../data/models/create_post_input.dart';
 import '../data/models/flash_summary_model.dart';
 import '../data/models/help_request_model.dart';
 import '../data/models/location_model.dart';
@@ -11,6 +13,7 @@ import '../data/models/post_model.dart';
 import '../data/repositories/community_repository.dart';
 import '../data/repositories/location_repository.dart';
 import 'api_providers.dart';
+import 'auth_providers.dart';
 
 // ========== LOCATION PROVIDERS ==========
 
@@ -77,16 +80,6 @@ final communityRepositoryProvider = Provider<CommunityRepository>((ref) {
   return CommunityRepository(apiClient: ref.watch(apiClientProvider));
 });
 
-/// GET `/community/vision/capabilities` — même couche que [CommunityVisionService] (Gemini, Ollama, FALC).
-final communityVisionCapabilitiesProvider =
-    FutureProvider<Map<String, dynamic>>((ref) async {
-  final repository = ref.watch(communityRepositoryProvider);
-  return repository.getCommunityVisionCapabilities();
-});
-
-/// @deprecated Utiliser [communityVisionCapabilitiesProvider].
-final accessibilityFeaturesProvider = communityVisionCapabilitiesProvider;
-
 // ========== POSTS PROVIDERS ==========
 
 final postsProvider = FutureProvider.family<
@@ -143,17 +136,27 @@ final postByIdProvider =
   return repository.getPostById(postId);
 });
 
-final createPostProvider = FutureProvider.family<PostModel, ({
-  String contenu,
-  String type,
-  List<XFile>? images,
-})>((ref, params) async {
+/// État Merci (connecté) ou décompte seul (invité).
+final postMerciStateProvider = FutureProvider.family<
+    ({bool thankReceivedFromMe, int merciCount}),
+    String>((ref, postId) async {
   final repository = ref.watch(communityRepositoryProvider);
-  final post = await repository.createPost(
-    contenu: params.contenu,
-    type: params.type,
-    images: params.images,
-  );
+  final user = ref.watch(authStateProvider).valueOrNull;
+  if (user == null) {
+    final post = await ref.read(postByIdProvider(postId).future);
+    return (thankReceivedFromMe: false, merciCount: post.merciCount);
+  }
+  try {
+    return await repository.getPostMerciState(postId);
+  } catch (_) {
+    final post = await ref.read(postByIdProvider(postId).future);
+    return (thankReceivedFromMe: false, merciCount: post.merciCount);
+  }
+});
+
+final createPostProvider = FutureProvider.family<PostModel, CreatePostInput>((ref, input) async {
+  final repository = ref.watch(communityRepositoryProvider);
+  final post = await repository.createPost(input);
   ref.invalidate(postsProvider((page: 1, limit: 20)));
   ref.invalidate(communityFeedProvider((
     page: 1,
@@ -166,6 +169,23 @@ final createPostProvider = FutureProvider.family<PostModel, ({
     smart: true,
   )));
   return post;
+});
+
+final communityActionPlanProvider = FutureProvider.family<
+    CommunityActionPlanResult,
+    ({
+      String text,
+      String? contextHint,
+      String? inputModeHint,
+      bool? isForAnotherPersonHint,
+    })>((ref, params) async {
+  final repository = ref.watch(communityRepositoryProvider);
+  return repository.getCommunityActionPlan(
+    text: params.text,
+    contextHint: params.contextHint,
+    inputModeHint: params.inputModeHint,
+    isForAnotherPersonHint: params.isForAnotherPersonHint,
+  );
 });
 
 // ========== COMMENTS PROVIDERS ==========
@@ -204,21 +224,23 @@ final helpRequestsProvider = FutureProvider.family<
   return repository.getHelpRequests(page: params.page, limit: params.limit);
 });
 
-final createHelpRequestProvider = FutureProvider.family<HelpRequestModel, ({
-  String description,
-  double latitude,
-  double longitude,
-})>((ref, params) async {
+final createHelpRequestProvider =
+    FutureProvider.family<HelpRequestModel, CreateHelpRequestInput>((ref, input) async {
   final repository = ref.watch(communityRepositoryProvider);
-  final request = await repository.createHelpRequest(
-    description: params.description,
-    latitude: params.latitude,
-    longitude: params.longitude,
-  );
-  // Invalider la liste des demandes pour rafraîchir
-  ref.invalidate(helpRequestsProvider((page: 1, limit: 20)));
+  final request = await repository.createHelpRequest(input);
+  invalidateHelpRequestListCaches(ref);
   return request;
 });
+
+/// Invalide les listes paginées [helpRequestsProvider] (pages 1–10, limite 20).
+///
+/// Accepte [Ref] (providers) et [WidgetRef] (widgets) — les deux exposent [invalidate].
+void invalidateHelpRequestListCaches(dynamic ref) {
+  const limit = 20;
+  for (var page = 1; page <= 10; page++) {
+    ref.invalidate(helpRequestsProvider((page: page, limit: limit)));
+  }
+}
 
 final updateHelpRequestStatusProvider = FutureProvider.family<HelpRequestModel, ({
   String id,
@@ -229,7 +251,6 @@ final updateHelpRequestStatusProvider = FutureProvider.family<HelpRequestModel, 
     id: params.id,
     statut: params.statut,
   );
-  // Invalider la liste des demandes
-  ref.invalidate(helpRequestsProvider((page: 1, limit: 20)));
+  invalidateHelpRequestListCaches(ref);
   return request;
 });

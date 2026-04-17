@@ -7,7 +7,6 @@ import '../../../data/models/post_model.dart';
 import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
 import '../widgets/post_image_gallery.dart';
-import '../widgets/ai_badge.dart';
 
 /// Écran de liste des posts de la communauté.
 class CommunityPostsScreen extends ConsumerStatefulWidget {
@@ -402,19 +401,9 @@ class _PostCard extends StatelessWidget {
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,
               ),
-              // Images avec badges IA
               if (post.images != null && post.images!.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                PostImageGallery(
-                  images: post.images!,
-                  accessibilityAnalysis: post.accessibilityAnalysis,
-                ),
-              ],
-              // Badge IA si pas d'images mais analyse disponible
-              if ((post.images == null || post.images!.isEmpty) &&
-                  post.accessibilityAnalysis != null) ...[
-                const SizedBox(height: 12),
-                AIBadge(analysis: post.accessibilityAnalysis!),
+                PostImageGallery(images: post.images!),
               ],
               const SizedBox(height: 12),
               // Footer : commentaires

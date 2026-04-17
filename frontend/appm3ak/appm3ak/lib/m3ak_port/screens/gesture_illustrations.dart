@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 // ============================================================
 // GESTURE ILLUSTRATIONS — Custom painted hand signs
@@ -11,11 +11,11 @@ class GestureIllustration extends StatelessWidget {
   final double size;
 
   const GestureIllustration({
-    Key? key,
+    super.key,
     required this.gestureName,
     required this.color,
     this.size = 120,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -192,7 +192,7 @@ class _HandPainterBase extends CustomPainter {
 // ============================================================
 
 class _BonjourPainter extends _HandPainterBase {
-  _BonjourPainter(Color color) : super(color);
+  _BonjourPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -233,7 +233,7 @@ class _BonjourPainter extends _HandPainterBase {
 }
 
 class _AuRevoirPainter extends _HandPainterBase {
-  _AuRevoirPainter(Color color) : super(color);
+  _AuRevoirPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -278,7 +278,7 @@ class _AuRevoirPainter extends _HandPainterBase {
 }
 
 class _MerciPainter extends _HandPainterBase {
-  _MerciPainter(Color color) : super(color);
+  _MerciPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -323,7 +323,7 @@ class _MerciPainter extends _HandPainterBase {
 }
 
 class _SilVousPlaitPainter extends _HandPainterBase {
-  _SilVousPlaitPainter(Color color) : super(color);
+  _SilVousPlaitPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -353,7 +353,7 @@ class _SilVousPlaitPainter extends _HandPainterBase {
 }
 
 class _ExcusezMoiPainter extends _HandPainterBase {
-  _ExcusezMoiPainter(Color color) : super(color);
+  _ExcusezMoiPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -389,7 +389,7 @@ class _ExcusezMoiPainter extends _HandPainterBase {
 // ============================================================
 
 class _AuSecoursPainter extends _HandPainterBase {
-  _AuSecoursPainter(Color color) : super(color);
+  _AuSecoursPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -440,7 +440,7 @@ class _AuSecoursPainter extends _HandPainterBase {
 }
 
 class _MedecinPainter extends _HandPainterBase {
-  _MedecinPainter(Color color) : super(color);
+  _MedecinPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -520,7 +520,7 @@ class _MedecinPainter extends _HandPainterBase {
 }
 
 class _DouleurPainter extends _HandPainterBase {
-  _DouleurPainter(Color color) : super(color);
+  _DouleurPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -581,7 +581,7 @@ class _DouleurPainter extends _HandPainterBase {
 }
 
 class _AmbulancePainter extends _HandPainterBase {
-  _AmbulancePainter(Color color) : super(color);
+  _AmbulancePainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -631,7 +631,7 @@ class _AmbulancePainter extends _HandPainterBase {
 }
 
 class _UrgencePainter extends _HandPainterBase {
-  _UrgencePainter(Color color) : super(color);
+  _UrgencePainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -682,7 +682,7 @@ class _UrgencePainter extends _HandPainterBase {
 // ============================================================
 
 class _BusPainter extends _HandPainterBase {
-  _BusPainter(Color color) : super(color);
+  _BusPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -751,7 +751,7 @@ class _BusPainter extends _HandPainterBase {
 }
 
 class _TaxiPainter extends _HandPainterBase {
-  _TaxiPainter(Color color) : super(color);
+  _TaxiPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -777,7 +777,7 @@ class _TaxiPainter extends _HandPainterBase {
 }
 
 class _GarePainter extends _HandPainterBase {
-  _GarePainter(Color color) : super(color);
+  _GarePainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -845,7 +845,7 @@ class _GarePainter extends _HandPainterBase {
 }
 
 class _BilletPainter extends _HandPainterBase {
-  _BilletPainter(Color color) : super(color);
+  _BilletPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -910,7 +910,7 @@ class _BilletPainter extends _HandPainterBase {
 }
 
 class _ArretPainter extends _HandPainterBase {
-  _ArretPainter(Color color) : super(color);
+  _ArretPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -953,7 +953,7 @@ class _ArretPainter extends _HandPainterBase {
 // ============================================================
 
 class _InfirmierPainter extends _HandPainterBase {
-  _InfirmierPainter(Color color) : super(color);
+  _InfirmierPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -994,7 +994,7 @@ class _InfirmierPainter extends _HandPainterBase {
 }
 
 class _MedicamentPainter extends _HandPainterBase {
-  _MedicamentPainter(Color color) : super(color);
+  _MedicamentPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1062,7 +1062,7 @@ class _MedicamentPainter extends _HandPainterBase {
 }
 
 class _RendezVousPainter extends _HandPainterBase {
-  _RendezVousPainter(Color color) : super(color);
+  _RendezVousPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1110,7 +1110,7 @@ class _RendezVousPainter extends _HandPainterBase {
 }
 
 class _OperationPainter extends _HandPainterBase {
-  _OperationPainter(Color color) : super(color);
+  _OperationPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1168,7 +1168,7 @@ class _OperationPainter extends _HandPainterBase {
 }
 
 class _DefaultHandPainter extends _HandPainterBase {
-  _DefaultHandPainter(Color color) : super(color);
+  _DefaultHandPainter(super.color);
 
   @override
   void paint(Canvas canvas, Size size) {

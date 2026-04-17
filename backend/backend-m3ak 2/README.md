@@ -23,6 +23,7 @@ Ce README est conçu pour être partagé avec l'équipe. Il contient tout ce don
 9. [Sécurité](#9-sécurité)
 10. [Installation et démarrage](#10-installation-et-démarrage)
 11. [Projets associés](#11-projets-associés)
+12. [Scénarios d’usage typiques](#12-scénarios-dusage-typiques)
 
 ---
 
@@ -73,6 +74,8 @@ Localisation de zones accessibles, réservation de lieux adaptés, transport, mi
 | **Hash mot de passe** | bcryptjs |
 | **Config** | @nestjs/config (global) |
 | **Upload fichiers** | Multer (stockage disque, dossier `uploads/`) |
+| **IA texte / vision (optionnel)** | Ollama (HTTP) pour résumés et scores — voir `AccessibilityService` |
+| **SDK Google** | Cloud Vision, Generative AI (selon services activés dans les modules) |
 
 ---
 
@@ -101,11 +104,14 @@ src/
 ├── transport-review/             # Évaluations transport → met à jour noteMoyenne
 ├── lieu/                         # Lieux accessibles (index géospatial 2dsphere)
 ├── lieu-reservation/             # Réservations de lieux
-├── community/                    # Communauté — posts, commentaires, demandes d'aide
+├── community/                    # Communauté — posts, commentaires, demandes d'aide, extraction lieu
 ├── education/                    # Modules éducatifs (Braille, LANGUE_SIGNES)
 ├── notification/                 # Notifications utilisateur
+├── accessibility/                # Feature flags Ollama + résumés commentaires / score urgence
+├── m3ak-learning/                # Compat. ancienne API M3AK : Braille, prédiction, vision signes/visage
+├── m3ak-guidance/                # Sessions guidage + analyse de frames (images base64)
 │
-└── uploads/                      # Photos de profil (servies sous /uploads/)
+└── uploads/                      # Fichiers uploadés (servis sous /uploads/)
 ```
 
 ---
@@ -130,6 +136,8 @@ src/
 4. **Contacts urgence** : Un HANDICAPE peut ajouter des ACCOMPAGNANT avec ordre de priorité.
 5. **Transport** : Le demandeur crée une demande ; un accompagnant disponible peut l'accepter. Les évaluations mettent à jour `noteMoyenne`.
 6. **Admin** : Les routes `/admin/*` sont protégées par JWT + rôle `ADMIN`.
+7. **Communauté / IA** : À la création d'un post, `CommunityVisionService` analyse le texte (lieu, risque, obstacle) via heuristiques et, pour les résumés / urgence, via `AccessibilityService` (Ollama si disponible, sinon repli local). Un danger **critique** avec coordonnées peut déclencher une **alerte SOS** (`SosAlertService`).
+8. **Points de confiance** : Les utilisateurs peuvent accumuler des `trustPoints` (commentaires utiles, acceptation de demandes d'aide — voir `CommunityService`).
 
 ### Flux d'authentification
 
@@ -160,6 +168,7 @@ src/
 | `specialisation` | string | non | Spécialisation (pour ACCOMPAGNANT) |
 | `disponible` | boolean | non | Disponible pour accompagnement (défaut: false) |
 | `noteMoyenne` | number | non | Note moyenne des évaluations (défaut: 0) |
+| `trustPoints` | number | non | Points de confiance (communauté : commentaires, aide) |
 | `langue` | string | non | Langue préférée (ar, fr, etc.) |
 | `photoProfil` | string | non | URL photo de profil |
 | `statut` | string | non | ACTIF (défaut) |
@@ -196,7 +205,9 @@ Champs : `userId`, `lieuId`, `date`, `heure`, `besoinsSpecifiques`, `qrCode`, `s
 
 ### Post (collection `posts`)
 
-Champs : `userId`, `contenu`, `type`, `createdAt`.
+Champs principaux : `userId`, `contenu`, `type`, `images[]`, géolocalisation optionnelle (`latitude`, `longitude`), `dangerLevel` (ex. `none`, `critical` — si critique + coords, le serveur peut créer une alerte SOS).
+
+Champs **IA / lieu** : `hasPlace`, `placeText`, `placeCategory`, `placeConfidence`, `riskLevel`, `obstaclePresent`, `aiSummary`, `reasonCodes[]`, `placeVerificationStatus`, `linkedLieuId`, `validationYes`, `validationNo`.
 
 ### Comment (collection `comments`)
 
@@ -282,6 +293,7 @@ Champs : `userId`, `titre`, `message`, `type`, `lu` (défaut: false), `createdAt
 | GET | `/sos-alerts/me` | JWT | Mes alertes |
 | GET | `/sos-alerts/nearby` | JWT | Alertes à proximité (query: latitude, longitude) |
 | POST | `/sos-alerts/:id/statut` | JWT | Mettre à jour le statut |
+| POST | `/sos-alerts/:id/respond` | JWT | Répondre / prendre en charge une alerte (voir contrôleur) |
 
 ---
 
@@ -345,14 +357,52 @@ Champs : `userId`, `titre`, `message`, `type`, `lu` (défaut: false), `createdAt
 
 | Méthode | Endpoint | Auth | Description |
 |---------|----------|------|-------------|
-| POST | `/community/posts` | JWT | Créer un post |
+| POST | `/community/posts` | JWT | Créer un post (multipart possible — images) |
 | GET | `/community/posts` | Non | Liste des posts (pagination) |
+| GET | `/community/posts/for-me` | JWT | Posts filtrés selon le profil handicap |
 | GET | `/community/posts/:id` | Non | Détail d'un post |
+| POST | `/community/posts/:postId/validate-obstacle` | JWT | Valider « obstacle toujours présent » (oui/non) |
 | POST | `/community/posts/:postId/comments` | JWT | Commenter un post |
 | GET | `/community/posts/:postId/comments` | Non | Commentaires d'un post |
+| GET | `/community/posts/:postId/comments/flash-summary` | Non | Résumé flash des commentaires (Ollama ou heuristique) |
 | POST | `/community/help-requests` | JWT | Créer une demande d'aide |
 | GET | `/community/help-requests` | Non | Liste des demandes |
 | POST | `/community/help-requests/:id/statut` | JWT | Mettre à jour le statut |
+| PATCH | `/community/help-requests/:id/accept` | JWT | Accepter une demande d'aide (accompagnant) |
+
+---
+
+### Accessibility (`/accessibility`)
+
+| Méthode | Endpoint | Auth | Description |
+|---------|----------|------|-------------|
+| GET | `/accessibility/features` | Non | Flags Ollama (`ollamaEnabled`, URLs, modèles) + ping `/api/tags` |
+
+---
+
+### M3AK Learning & Vision (`/m3ak`)
+
+Compatibilité avec l’ancienne API FastAPI M3AK (Braille, prédiction, signes, visage).
+
+| Méthode | Endpoint | Auth | Description |
+|---------|----------|------|-------------|
+| GET | `/m3ak` | Non | Health check sous-namespace M3AK |
+| GET | `/m3ak/next_exercise/:userId` | Non | Prochain exercice Braille |
+| POST | `/m3ak/predict` | Non | Prédiction / feedback pédagogique |
+| POST | `/m3ak/update_profile/:userId` | Non | Mise à jour profil progression |
+| POST | `/m3ak/sign/explain` | Non | Analyse / explication LSF (fichier upload) |
+| POST | `/m3ak/face/detect` | Non | Détection visage |
+| POST | `/m3ak/face/encode` | Non | Encodage / embedding |
+| POST | `/m3ak/face/emotion` | Non | Émotion |
+
+---
+
+### M3AK Guidance (`/m3ak/guidance`)
+
+| Méthode | Endpoint | Auth | Description |
+|---------|----------|------|-------------|
+| POST | `/m3ak/guidance/session` | Non | Créer une session (hint client) |
+| POST | `/m3ak/guidance/frame` | Non | Analyser une image (base64) dans une session |
 
 ---
 
@@ -414,7 +464,12 @@ Champs : `userId`, `titre`, `message`, `type`, `lu` (défaut: false), `createdAt
 | `JWT_SECRET` | Oui | Secret pour signer les JWT — utiliser une valeur longue et aléatoire |
 | `JWT_EXPIRES_IN` | Non | Durée du token (défaut: 7d) |
 | `GOOGLE_CLIENT_ID` | Non | Pour login Google OAuth2 |
-| `CORS_ORIGINS` | Non | Origines autorisées, séparées par des virgules |
+| `CORS_ORIGINS` | Non | Origines autorisées, séparées par des virgules (production) |
+| `NODE_ENV` | Non | `production` : CORS restreint, écoute sur `PORT` uniquement ; sinon CORS large et `0.0.0.0` pour émulateurs |
+| `OLLAMA_ENABLED` | Non | Si absent : **Ollama activé** par défaut ; `false` pour forcer le repli heuristique |
+| `OLLAMA_BASE_URL` | Non | Défaut `http://127.0.0.1:11434` |
+| `OLLAMA_MODEL` | Non | Modèle texte (défaut `llama3.2`) |
+| `OLLAMA_VISION_MODEL` | Non | Modèle vision (défaut `llava`) |
 
 \* Soit `MONGODB_URI` (MongoDB local), soit les variables Atlas.
 
@@ -486,6 +541,19 @@ npm run format
 | **Backoffice web (CRUD)** | `BACKOFFICE_CRUD_PROMPT.md` | Site web pour CRUD utilisateurs (admin) |
 | **Backoffice web (complet)** | `BACKOFFICE_ADMIN_PROMPT.md` | Description détaillée du backoffice |
 | **Backoffice web (mise à jour)** | `BACKOFFICE_WEB_PROMPT.md` | Changements API 2025 pour le backoffice |
+
+---
+
+## 12. Scénarios d’usage typiques
+
+1. **Onboarding** : `POST /user/register` → `POST /auth/login` (ou `POST /auth/google`) → toutes les routes JWT avec `Authorization: Bearer …`.
+2. **Signalement d’obstacle avec position** : `POST /community/posts` avec texte, coords, `dangerLevel` ; le serveur enrichit le post (extraction lieu, statut de vérification) et, si `dangerLevel === critical` et coords valides, crée une **SOS** pour les utilisateurs à proximité.
+3. **Validation par la communauté** : autres utilisateurs appellent `POST …/validate-obstacle` pour confirmer ou infirmer la présence de l’obstacle (votes).
+4. **Résumé des commentaires** : `GET …/comments/flash-summary` — utile pour afficher une synthèse courte (Ollama si joignable).
+5. **Demande d’aide terrain** : création `POST /community/help-requests` → un accompagnant `PATCH …/accept` → points de confiance mis à jour selon la logique métier.
+6. **Transport** : `POST /transport` → accompagnant `POST /transport/:id/accept` → fin de course → `POST /transport-reviews/transport/:id` pour noter.
+7. **Inclusion M3AK (Flutter + ancienne stack)** : l’app mobile appelle `GET/POST /m3ak/*` (Braille, prédiction, LSF, visage) et éventuellement `POST /m3ak/guidance/frame` pour l’analyse d’images guidée.
+8. **Administration** : compte `ADMIN` → `GET/PATCH/DELETE /admin/users` pour support et modération.
 
 ---
 

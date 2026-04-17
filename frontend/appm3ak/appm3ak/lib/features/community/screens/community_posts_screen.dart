@@ -25,6 +25,12 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
   /// Filtre backend selon `role` + `typeHandicap` (endpoint `GET /community/posts/for-me`).
   bool _smartProfileFilter = false;
 
+  Future<void> _openCreatePost(BuildContext context) async {
+    // Le + doit toujours ouvrir l’écran “Créer un post” (formulaire complet).
+    // Les modes accessibilité restent accessibles depuis cet écran.
+    await context.push('/create-post');
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
@@ -63,7 +69,7 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline),
-                  onPressed: () => context.push('/create-post'),
+                  onPressed: () => _openCreatePost(context),
                   tooltip: strings.createPost,
                 ),
               ],
@@ -152,7 +158,7 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                         ),
                         const SizedBox(height: 24),
                         ElevatedButton.icon(
-                          onPressed: () => context.push('/create-post'),
+                          onPressed: () => _openCreatePost(context),
                           icon: const Icon(Icons.add),
                           label: Text(strings.createPost),
                         ),
@@ -415,6 +421,8 @@ class _PostCard extends StatelessWidget {
                                 ),
                               ),
                             ),
+                            if (post.user?.partenaire == true)
+                              const PartnerOrgBadge(compact: true),
                             VerifiedHelperBadge(
                               trustPoints: post.user?.trustPoints ?? 0,
                             ),
@@ -466,7 +474,7 @@ class _PostCard extends StatelessWidget {
                     height: 140,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
                   ),
                 ),
               ],
@@ -474,6 +482,19 @@ class _PostCard extends StatelessWidget {
               // Footer : commentaires
               Row(
                 children: [
+                  Icon(
+                    Icons.volunteer_activism_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${post.merciCount} merci',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
                   Icon(
                     Icons.comment_outlined,
                     size: 16,

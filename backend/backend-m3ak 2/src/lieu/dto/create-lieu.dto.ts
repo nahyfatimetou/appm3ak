@@ -9,6 +9,7 @@ import {
   Max,
   IsArray,
   MinLength,
+  IsIn,
 } from 'class-validator';
 
 export class CreateLieuDto {
@@ -49,6 +50,42 @@ export class CreateLieuDto {
   @Min(0)
   @Max(100)
   scoreAccessibilite?: number;
+
+  @ApiPropertyOptional({
+    description: 'Niveau de risque visuel',
+    enum: ['safe', 'caution', 'danger'],
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['safe', 'caution', 'danger'])
+  riskLevel?: string;
+
+  @ApiPropertyOptional({
+    description: 'Statut de vérification',
+    enum: ['auto', 'pending', 'verified', 'rejected'],
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['auto', 'pending', 'verified', 'rejected'])
+  verificationStatus?: string;
+
+  @ApiPropertyOptional({ description: 'Résumé IA / texte communautaire' })
+  @IsOptional()
+  @IsString()
+  aiSummary?: string;
+
+  @ApiPropertyOptional({ description: 'Confiance IA [0..1]' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  aiConfidence?: number;
+
+  @ApiPropertyOptional({ description: 'Obstacle présent' })
+  @IsOptional()
+  @IsBoolean()
+  obstaclePresent?: boolean;
 
   @ApiPropertyOptional({ description: 'Rampe' })
   @IsOptional()

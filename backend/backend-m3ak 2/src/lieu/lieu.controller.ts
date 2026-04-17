@@ -87,7 +87,7 @@ export class LieuController {
     return this.lieuService.findNearby(
       parseFloat(latitude),
       parseFloat(longitude),
-      maxDistance ? parseInt(maxDistance, 10) : 5000,
+      maxDistance ? parseInt(maxDistance, 10) : 50_000,
     );
   }
 

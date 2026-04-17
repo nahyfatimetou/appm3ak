@@ -12,9 +12,15 @@ import 'home_tab.dart';
 
 /// Shell principal après connexion : barre de navigation basse (Accueil, Santé, Transport, Milieux, Profil).
 class MainShell extends ConsumerStatefulWidget {
-  const MainShell({super.key, this.initialIndex = 0});
+  const MainShell({
+    super.key,
+    this.initialIndex = 0,
+    this.communityTabIndex = 0,
+  });
 
   final int initialIndex;
+  /// Sous-onglet dans [CommunityMainScreen] : 0 tous les lieux, 1 posts, 2 à proximité, 3 demandes d'aide.
+  final int communityTabIndex;
 
   @override
   ConsumerState<MainShell> createState() => _MainShellState();
@@ -34,6 +40,25 @@ class _MainShellState extends ConsumerState<MainShell> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialIndex != widget.initialIndex) {
       _currentIndex = widget.initialIndex.clamp(0, 4);
+    }
+  }
+
+  /// Garde l’URL alignée sur l’onglet (sinon `go` vocal peut être un no-op si l’URL n’a pas changé).
+  void _goTab(int index) {
+    final i = index.clamp(0, 4);
+    if (mounted) {
+      setState(() => _currentIndex = i);
+    }
+    if (i == 3) {
+      final uri = GoRouterState.of(context).uri;
+      final ct = uri.queryParameters['communityTab'];
+      final params = <String, String>{'tab': '3'};
+      if (ct != null && ct.isNotEmpty) params['communityTab'] = ct;
+      context.go(Uri(path: '/home', queryParameters: params).toString());
+    } else {
+      context.go(
+        Uri(path: '/home', queryParameters: {'tab': '$i'}).toString(),
+      );
     }
   }
 
@@ -69,7 +94,9 @@ class _MainShellState extends ConsumerState<MainShell> {
             body = _PlaceholderTab(title: strings.transport);
             break;
           case 3:
-            body = const CommunityMainScreen();
+            body = CommunityMainScreen(
+              initialTabIndex: widget.communityTabIndex,
+            );
             break;
           case 4:
             body = const ProfileTab();
@@ -103,7 +130,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                       label: strings.home,
                       selected: _currentIndex == 0,
                       primary: primary,
-                      onTap: () => setState(() => _currentIndex = 0),
+                      onTap: () => _goTab(0),
                     ),
                     _NavItem(
                       icon: Icons.medical_services_outlined,
@@ -111,7 +138,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                       label: strings.health,
                       selected: _currentIndex == 1,
                       primary: primary,
-                      onTap: () => setState(() => _currentIndex = 1),
+                      onTap: () => _goTab(1),
                     ),
                     _NavItem(
                       icon: Icons.directions_bus_outlined,
@@ -119,7 +146,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                       label: strings.transport,
                       selected: _currentIndex == 2,
                       primary: primary,
-                      onTap: () => setState(() => _currentIndex = 2),
+                      onTap: () => _goTab(2),
                     ),
                     _NavItem(
                       icon: Icons.location_city_outlined,
@@ -127,7 +154,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                       label: strings.places,
                       selected: _currentIndex == 3,
                       primary: primary,
-                      onTap: () => setState(() => _currentIndex = 3),
+                      onTap: () => _goTab(3),
                     ),
                     _NavItem(
                       icon: Icons.person_outline,
@@ -135,7 +162,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                       label: strings.profile,
                       selected: _currentIndex == 4,
                       primary: primary,
-                      onTap: () => setState(() => _currentIndex = 4),
+                      onTap: () => _goTab(4),
                     ),
                   ],
                 ),
@@ -147,7 +174,7 @@ class _MainShellState extends ConsumerState<MainShell> {
       loading: () => const Scaffold(
         body: Center(child: CircularProgressIndicator()),
       ),
-      error: (_, __) => Scaffold(
+      error: (_, err) => Scaffold(
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,

@@ -1,4 +1,3 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,12 +7,11 @@ import 'package:go_router/go_router.dart';
 import '../../../core/enums/type_handicap.dart';
 import '../../../core/l10n/app_strings.dart';
 import '../../../data/models/comment_model.dart';
-import '../../../data/models/image_vision_description_model.dart';
 import '../../../data/models/post_model.dart';
-import '../../../data/models/simplified_text_model.dart';
 import '../../../data/repositories/community_repository.dart';
 import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
+import '../../../providers/post_detail_assistance_provider.dart';
 import '../../../widgets/verified_helper_badge.dart';
 
 /// Écran de détails d'un post avec commentaires.
@@ -30,185 +28,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _commentController = TextEditingController();
   final FlutterTts _flutterTts = FlutterTts();
   bool _isSubmittingComment = false;
-  bool _isSimplifyingText = false;
-  bool _prefetchStarted = false;
-  String? _lastSpokenSimplifiedKey;
+  bool _merciBusy = false;
+  bool _obstacleBusy = false;
   String? _lastSpokenPostKey;
-
-  String _cleanSimplifiedText(String text) {
-    // Objectif: garder uniquement le contenu "humain".
-    // Suppression:
-    // - introductions (ex: "Voici une/un résumé du texte...")
-    // - "Points clés"
-    // - instructions techniques (ex: "En 2 phrases de 5 mots maximum")
-    // - guillemets inutiles et balisage technique.
-    if (text.trim().isEmpty) return '';
-
-    var out = text.trim();
-
-    // Supprimer les code fences markdown (```json ... ```).
-    out = out.replaceAll(RegExp(r'```[\s\S]*?```'), '');
-    out = out.replaceAll('```json', '');
-    out = out.replaceAll('```JSON', '');
-    out = out.replaceAll('```', '');
-
-    // Supprimer introductions / consignes.
-    out = out.replaceAll(
-      RegExp(
-        r'\bVoici\s+(un|une)\s+résum(?:é|ée)\b[^:]*:?\s*',
-        caseSensitive: false,
-        dotAll: true,
-      ),
-      '',
-    );
-    out = out.replaceAll(
-      RegExp(
-        r'\bEn\s+\d+\s+phrases?\s+de\s+\d+\s+mots?\s+maximum\b.*$',
-        caseSensitive: false,
-        multiLine: true,
-        dotAll: true,
-      ),
-      '',
-    );
-    out = out.replaceAll(
-      RegExp(
-        r'\bPoints\s+clés\b.*$',
-        multiLine: true,
-        dotAll: true,
-      ),
-      '',
-    );
-
-    // Nettoyage markdown / puces / titres.
-    out = out.replaceAll(RegExp(r'^\s*•\s*', multiLine: true), '');
-    out = out.replaceAll(RegExp(r'^\s*#+\s*', multiLine: true), '');
-
-    // Extraire prioritairement les phrases entre guillemets.
-    final quoted = <String>[];
-    for (final m in RegExp(r'["“](.+?)["”]').allMatches(out)) {
-      final s = m.group(1)?.trim() ?? '';
-      if (s.isNotEmpty) quoted.add(s);
-    }
-    if (quoted.isNotEmpty) {
-      return quoted.join('\n').trim();
-    }
-
-    // Sinon: lignes propres (et suppression des guillemets restants).
-    out = out.replaceAll('"', '');
-    out = out.replaceAll('“', '');
-    out = out.replaceAll('”', '');
-    out = out.replaceAll('`', '');
-
-    return out
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .join('\n')
-        .trim();
-  }
-
-  List<String> _extractSimplifiedItems(SimplifiedTextModel simplified) {
-    if (simplified.keyPoints.isNotEmpty) {
-      // Le backend peut renvoyer des keyPoints pollués (introductions / consignes).
-      // On nettoie chaque entrée et on découpe en lignes.
-      final out = <String>[];
-      for (final kp in simplified.keyPoints) {
-        final cleaned = _cleanSimplifiedText(kp);
-        if (cleaned.isEmpty) continue;
-        for (final line in cleaned
-            .split('\n')
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)) {
-          out.add(line);
-        }
-      }
-      return out.toList(growable: false);
-    }
-
-    final cleaned = _cleanSimplifiedText(simplified.simplifiedText);
-    if (cleaned.isEmpty) return const [];
-
-    return cleaned
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList(growable: false);
-  }
-
-  String _annotateSimplifiedSentence(String s) {
-    var t = s.trim();
-    if (t.isEmpty) return t;
-
-    // Choisir emoji selon la présence de mots "danger".
-    final lower = t.toLowerCase();
-    const dangerWords = <String>[
-      'danger',
-      'dangereux',
-      'risque',
-      'grave',
-      'évitez',
-      'evitez',
-      'urgence',
-      'malaise',
-      'douleur',
-      'maladie',
-    ];
-    final isDanger = dangerWords.any(lower.contains);
-    final emoji = isDanger ? '🚫' : '🚸';
-
-    // Enlever guillemets restants (si le backend en met encore).
-    t = t
-        .replaceAll(RegExp(r'^[\"“”]+'), '')
-        .replaceAll(RegExp(r'[\"“”]+$'), '')
-        .trim();
-    return '$emoji $t';
-  }
-
-  String _formatSimplifiedForUi(SimplifiedTextModel simplified) {
-    final items = _extractSimplifiedItems(simplified);
-    if (items.isEmpty) return '';
-
-    // Résumé direct: max 6 phrases.
-    return items
-        .take(6)
-        .map(_annotateSimplifiedSentence)
-        .join('\n')
-        .trim();
-  }
-
-  String _formatSimplifiedForSpeech(SimplifiedTextModel simplified) {
-    final items = _extractSimplifiedItems(simplified);
-    if (items.isEmpty) return '';
-    return items.take(6).join('\n').trim();
-  }
-
-  String _cleanImageDescriptionText(String text) {
-    var out = text.trim();
-    if (out.isEmpty) return out;
-
-    // Certains backends peuvent renvoyer une string qui ressemble à du JSON
-    // encodé dans `description` (ex: "description_audio":"...").
-    // On extrait la valeur de `description` en priorité, sinon `description_audio`.
-    final visionMatch = RegExp(
-      r'"description"\s*:\s*"((?:\\.|[^"\\])*)"',
-      dotAll: true,
-    ).firstMatch(out);
-    final audioMatch = RegExp(
-      r'"description_audio"\s*:\s*"((?:\\.|[^"\\])*)"',
-      dotAll: true,
-    ).firstMatch(out);
-
-    final extracted = visionMatch?.group(1) ?? audioMatch?.group(1);
-    if (extracted != null && extracted.isNotEmpty) {
-      // Dé-échappement basique.
-      return extracted
-          .replaceAll(r'\"', '"')
-          .replaceAll(r'\n', '\n')
-          .replaceAll(r'\\', '\\');
-    }
-
-    return out;
-  }
 
   @override
   void initState() {
@@ -230,37 +52,6 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     super.dispose();
   }
 
-  /// Message lisible pour les erreurs API (timeouts, 403, corps Nest).
-  String _readableApiError(Object e) {
-    if (e is DioException) {
-      final data = e.response?.data;
-      if (data is Map<String, dynamic>) {
-        final msg = data['message'];
-        if (msg is String && msg.isNotEmpty) return msg;
-        if (msg is List && msg.isNotEmpty) {
-          final first = msg.first;
-          if (first is String) return first;
-          if (first is Map && first['msg'] is String) {
-            return first['msg'] as String;
-          }
-        }
-      }
-      switch (e.type) {
-        case DioExceptionType.connectionTimeout:
-        case DioExceptionType.sendTimeout:
-        case DioExceptionType.receiveTimeout:
-          return 'Délai réseau dépassé. L’analyse photo (Ollama) peut prendre plusieurs minutes au 1ᵉʳ lancement — réessayez ou testez depuis l’app mobile. Vérifiez ollama serve.';
-        default:
-          break;
-      }
-      if (e.response?.statusCode == 401) {
-        return 'Session expirée : reconnectez-vous.';
-      }
-      final m = e.message;
-      if (m != null && m.isNotEmpty) return m;
-    }
-    return e.toString();
-  }
 
   Future<void> _speakDescription(String text) async {
     final t = text.trim();
@@ -319,255 +110,89 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     }
   }
 
-  Future<void> _readSimplified(String postContent) async {
-    if (_isSimplifyingText) return;
-    setState(() => _isSimplifyingText = true);
-    final u0 = ref.read(authStateProvider).valueOrNull;
-    final s0 = AppStrings.fromPreferredLanguage(u0?.preferredLanguage?.name);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            content: Row(
-              children: [
-                const SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: Text(
-                    s0.falcSimplificationLoading,
-                    style: Theme.of(dialogCtx).textTheme.bodyLarge,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    try {
-      final repository = ref.read(communityRepositoryProvider);
-      final simplified = await repository.simplifyText(text: postContent);
-
-      if (!mounted) return;
-      context.pop();
-      final user = ref.read(authStateProvider).valueOrNull;
-      final isVisualUser =
-          TypeHandicap.fromApiString(user?.typeHandicap) == TypeHandicap.visuel;
-      final strings = AppStrings.fromPreferredLanguage(
-        user?.preferredLanguage?.name,
-      );
-      final speechText = _formatSimplifiedForSpeech(simplified);
-      final speechKey = speechText;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(strings.simplifiedVersionTitle),
-              if (simplified.source != null) ...[
-                const SizedBox(height: 8),
-                Chip(
-                  label: Text(
-                    simplified.source == 'ollama'
-                        ? strings.simplifySourceOllama
-                        : strings.simplifySourceHeuristic,
-                    style: Theme.of(ctx).textTheme.labelSmall,
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                ),
-              ],
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatSimplifiedForUi(simplified),
-                  softWrap: true,
-                  style: Theme.of(ctx).textTheme.bodyLarge,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            if (isVisualUser && speechText.isNotEmpty)
-              FilledButton.icon(
-                onPressed: () => _speakDescription(speechText),
-                icon: const Icon(Icons.record_voice_over),
-                label: const Text('Lire en audio'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Fermer'),
-            ),
-          ],
-        ),
-      );
-
-      // Lecture automatique (une seule fois) pour les non-voyants.
-      if (isVisualUser && speechKey.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (!mounted) return;
-          if (_lastSpokenSimplifiedKey == speechKey) return;
-          _lastSpokenSimplifiedKey = speechKey;
-          await _speakDescription(speechText);
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      if (Navigator.of(context).canPop()) {
-        context.pop();
-      }
+  Future<void> _toggleMerci() async {
+    if (_merciBusy) return;
+    final user = ref.read(authStateProvider).valueOrNull;
+    if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur simplification : ${_readableApiError(e)}'),
-          backgroundColor: Colors.red,
-        ),
+        const SnackBar(content: Text('Connectez-vous pour remercier ce signalement.')),
       );
+      return;
+    }
+    setState(() => _merciBusy = true);
+    try {
+      await ref.read(communityRepositoryProvider).togglePostMerci(widget.postId);
+      ref.invalidate(postMerciStateProvider(widget.postId));
+      ref.invalidate(postByIdProvider(widget.postId));
+      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: false)));
+      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: true)));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
-      if (mounted) setState(() => _isSimplifyingText = false);
+      if (mounted) setState(() => _merciBusy = false);
     }
   }
 
-  Future<void> _loadImageAudioDescription({
-    required PostModel post,
-    required int imageIndex,
-  }) async {
-    final u0 = ref.read(authStateProvider).valueOrNull;
-    final s0 = AppStrings.fromPreferredLanguage(u0?.preferredLanguage?.name);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            content: Row(
-              children: [
-                const SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: Text(
-                    s0.imageAnalysisLoading,
-                    style: Theme.of(dialogCtx).textTheme.bodyLarge,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+  Future<void> _voteObstacle(bool confirm) async {
+    if (_obstacleBusy) return;
+    final user = ref.read(authStateProvider).valueOrNull;
+    if (user == null) return;
+    setState(() => _obstacleBusy = true);
     try {
-      final repository = ref.read(communityRepositoryProvider);
-      final ImageVisionDescription result =
-          await repository.getPostImageAccessibilityDescription(
-        postId: post.id,
-        imageIndex: imageIndex,
-      );
-      if (!mounted) return;
-      context.pop();
-      final u1 = ref.read(authStateProvider).valueOrNull;
-      final dialogStrings =
-          AppStrings.fromPreferredLanguage(u1?.preferredLanguage?.name);
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) {
-          return AlertDialog(
-            title: const Text('Description de l’image'),
-            content: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (result.source == 'vision')
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        'Analyse vision (IA)',
-                        style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                              color: Theme.of(ctx).colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                    ),
-                  if (result.displaySummary != null &&
-                      result.displaySummary!.isNotEmpty) ...[
-                    Text(
-                      result.displaySummary!,
-                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      dialogStrings.imageDetailForReadingAndTts,
-                      style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                            color: Theme.of(ctx).colorScheme.outline,
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                  ],
-                  if (result.source == 'vision' &&
-                      result.description.trim().isNotEmpty)
-                    Text(
-                      _cleanImageDescriptionText(result.description),
-                      softWrap: true,
-                    ),
-                  if (result.textDetected != null &&
-                      result.textDetected!.trim().isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      'Texte lisible sur l’image',
-                      style: Theme.of(ctx).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(result.textDetected!, softWrap: true),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Fermer'),
-              ),
-              FilledButton.icon(
-                onPressed: () => _speakDescription(
-                  _cleanImageDescriptionText(result.textForSpeech),
-                ),
-                icon: const Icon(Icons.record_voice_over),
-                label: const Text('Lire à voix haute'),
-              ),
-            ],
+      await ref.read(communityRepositoryProvider).validatePostObstacle(
+            postId: widget.postId,
+            confirm: confirm,
           );
-        },
-      );
+      ref.invalidate(postByIdProvider(widget.postId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Merci, votre avis est enregistré.')),
+        );
+      }
     } catch (e) {
-      if (!mounted) return;
-      context.pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Description image : ${_readableApiError(e)}'),
-          backgroundColor: Colors.red,
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _obstacleBusy = false);
+    }
+  }
+
+  Future<void> _confirmDeletePostAsAdmin() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Modération'),
+        content: const Text(
+          'Supprimer ce post du flux ? (spam ou contenu inapproprié)',
         ),
-      );
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Annuler')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await ref.read(communityRepositoryProvider).deletePostAdmin(widget.postId);
+      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: false)));
+      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: true)));
+      if (mounted) context.pop();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -583,84 +208,58 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     final commentsAsync = ref.watch(postCommentsProvider(widget.postId));
     final flashSummaryAsync =
         ref.watch(postCommentsFlashSummaryProvider(widget.postId));
-    final visionCapabilitiesAsync =
-        ref.watch(communityVisionCapabilitiesProvider);
+    ref.watch(postMerciStateProvider(widget.postId));
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         title: Text(strings.postDetails),
+        actions: [
+          if (user?.isAdmin == true)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              tooltip: 'Modération',
+              onSelected: (v) {
+                if (v == 'delete') _confirmDeletePostAsAdmin();
+              },
+              itemBuilder: (ctx) => const [
+                PopupMenuItem(
+                  value: 'delete',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('Supprimer ce post'),
+                    subtitle: Text('Spam ou photo inappropriée'),
+                  ),
+                ),
+              ],
+            ),
+        ],
       ),
       body: postAsync.when(
         data: (post) {
           final handicap = TypeHandicap.fromApiString(user?.typeHandicap);
-          final wantsPhotoAnalysis = handicap == TypeHandicap.visuel;
-          final wantsSimplify =
-              handicap == TypeHandicap.cognitif || handicap == TypeHandicap.visuel;
-          final wantsAny = wantsPhotoAnalysis || wantsSimplify;
+          final wantsTts = handicap == TypeHandicap.visuel;
 
-          final hasImages = post.images != null && post.images!.isNotEmpty;
           final hasContent = post.contenu.trim().isNotEmpty;
-
-          // Précharge en arrière-plan pour que le clic utilisateur soit rapide.
-          if (!_prefetchStarted && wantsAny) {
-            _prefetchStarted = true;
-            WidgetsBinding.instance.addPostFrameCallback((_) async {
-              if (!mounted) return;
-              final repository = ref.read(communityRepositoryProvider);
-              try {
-                if (wantsSimplify && hasContent) {
-                  await repository.simplifyText(text: post.contenu);
-                }
-                // Important : on préchauffe même si `visionCapabilitiesAsync`
-                // n'est pas encore prêt (valueOrNull peut être null au premier build).
-                // Le clic utilisateur relancera en cas d'échec.
-                if (wantsPhotoAnalysis && hasImages) {
-                  final count = post.images?.length ?? 0;
-                  final indices = count <= 2
-                      ? List<int>.generate(count, (i) => i)
-                      : const [0];
-                  for (final imageIndex in indices) {
-                    await repository.getPostImageAccessibilityDescription(
-                      postId: post.id,
-                      imageIndex: imageIndex,
-                    );
-                  }
-                }
-              } catch (_) {
-                // On ignore: la récupération exacte sera faite au clic.
-              }
-            });
-          }
 
           // Lecture automatique du texte du post pour les utilisateurs
           // handicap visuel (non-voyants), une seule fois par ouverture.
-          if (wantsPhotoAnalysis && hasContent) {
-            final postKey = '${post.id}|${post.contenu.hashCode}';
+          if (wantsTts && hasContent) {
+            final ttsText =
+                ref.read(postDetailAssistanceProvider).buildTtsReadablePost(post);
+            final postKey = '${post.id}|${ttsText.hashCode}';
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               if (!mounted) return;
               if (_lastSpokenPostKey == postKey) return;
               _lastSpokenPostKey = postKey;
-              await _speakDescription(post.contenu);
+              await _speakDescription(ttsText);
             });
           }
 
           return Column(
             children: [
-              visionCapabilitiesAsync.when(
-                data: (m) {
-                  final geminiOk = m['geminiConfigured'] == true;
-                  final ollamaOk = m['ollamaReachable'] == true;
-                  if (geminiOk || ollamaOk) return const SizedBox.shrink();
-                  // On masque le message d'installation/configuration Ollama.
-                  // (Affichage réservé si tu veux une aide utilisateur dans une autre UI.)
-                  return const SizedBox.shrink();
-                },
-                loading: () => const SizedBox.shrink(),
-                error: (_, _) => const SizedBox.shrink(),
-              ),
-              // Post principal
               Expanded(
                 child: SingleChildScrollView(
                   keyboardDismissBehavior:
@@ -670,121 +269,240 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // En-tête du post
                       _PostHeader(post: post),
                       const SizedBox(height: 16),
-                      Divider(color: theme.colorScheme.outline),
-                      const SizedBox(height: 16),
-                      // Contenu complet + accès explicite FALC
-                      Text(
-                        post.contenu,
-                        style: theme.textTheme.bodyLarge,
-                        softWrap: true,
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.start,
-                        children: [
-                          FilledButton.tonalIcon(
-                            onPressed: _isSimplifyingText
-                                ? null
-                                : () => _readSimplified(post.contenu),
-                            icon: _isSimplifyingText
-                                ? SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: primary,
-                                    ),
-                                  )
-                                : const Icon(Icons.auto_fix_high_outlined),
-                            label: Text(strings.simplifyText),
-                          ),
-                          if (wantsPhotoAnalysis)
-                            FilledButton.tonalIcon(
-                              onPressed: () => _speakDescription(
-                                post.contenu.trim(),
+                      Card(
+                        margin: EdgeInsets.zero,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Semantics(
+                                header: true,
+                                child: Text(
+                                  'Contenu du post',
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                               ),
-                              icon: const Icon(Icons.volume_up_outlined),
-                              label: const Text('Lire le texte'),
-                            ),
-                        ],
+                              const SizedBox(height: 10),
+                              Text(
+                                post.contenu,
+                                style: theme.textTheme.bodyLarge?.copyWith(
+                                  height: 1.45,
+                                ),
+                                softWrap: true,
+                              ),
+                              if (wantsTts) ...[
+                                const SizedBox(height: 12),
+                                FilledButton.tonalIcon(
+                                  onPressed: () => _speakDescription(
+                                    ref
+                                        .read(postDetailAssistanceProvider)
+                                        .buildTtsReadablePost(post),
+                                  ),
+                                  style: FilledButton.styleFrom(
+                                    minimumSize: const Size(170, 48),
+                                  ),
+                                  icon: const Icon(Icons.volume_up_outlined),
+                                  label: const Text('Lire le texte'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
                       ),
                       if (post.images != null && post.images!.isNotEmpty) ...[
                         const SizedBox(height: 16),
-                        ...post.images!.asMap().entries.map((entry) {
-                          final imageIndex = entry.key;
-                          final path = entry.value;
+                        ...post.images!.map((path) {
                           final url = CommunityRepository.uploadUrl(path);
-                          final visualProfile = isVisualHandicapProfile(
-                            user?.typeHandicap,
-                          );
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.network(
-                                    url,
-                                    width: double.infinity,
-                                    fit: BoxFit.cover,
-                                    loadingBuilder: (_, child, progress) {
-                                      if (progress == null) return child;
-                                      return SizedBox(
-                                        height: 200,
-                                        child: Center(
-                                          child: CircularProgressIndicator(
-                                            value: progress.expectedTotalBytes !=
-                                                    null
-                                                ? progress.cumulativeBytesLoaded /
-                                                    progress.expectedTotalBytes!
-                                                : null,
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                    errorBuilder: (_, _, _) => Container(
-                                      height: 120,
-                                      color: theme
-                                          .colorScheme.surfaceContainerHighest,
-                                      alignment: Alignment.center,
-                                      child: const Icon(Icons.broken_image),
-                                    ),
-                                  ),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: TextButton.icon(
-                                      onPressed: () => _loadImageAudioDescription(
-                                        post: post,
-                                        imageIndex: imageIndex,
-                                      ),
-                                      icon: Icon(
-                                        visualProfile
-                                            ? Icons.headphones
-                                            : Icons.image_search_outlined,
-                                        size: 20,
-                                      ),
-                                      label: Text(
-                                        visualProfile
-                                            ? strings.imageDescriptionAndAudio
-                                            : strings.analyzeImageWithAi,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.network(
+                                url,
+                                width: double.infinity,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (_, child, progress) {
+                                  if (progress == null) return child;
+                                  return SizedBox(
+                                    height: 200,
+                                    child: Center(
+                                      child: CircularProgressIndicator(
+                                        value: progress.expectedTotalBytes !=
+                                                null
+                                            ? progress.cumulativeBytesLoaded /
+                                                progress.expectedTotalBytes!
+                                            : null,
                                       ),
                                     ),
-                                  ),
+                                  );
+                                },
+                                errorBuilder: (_, _, _) => Container(
+                                  height: 120,
+                                  color: theme
+                                      .colorScheme.surfaceContainerHighest,
+                                  alignment: Alignment.center,
+                                  child: const Icon(Icons.broken_image),
                                 ),
-                              ],
+                              ),
                             ),
                           );
                         }),
                       ],
+                      const SizedBox(height: 16),
+                      flashSummaryAsync.when(
+                        data: (flash) {
+                          if (flash.summary.trim().isEmpty) return const SizedBox.shrink();
+                          return Card(
+                            margin: EdgeInsets.zero,
+                            color: theme.colorScheme.surfaceContainerHigh,
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Résumé rapide',
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      _MetaChip(
+                                        icon: Icons.groups_2_outlined,
+                                        label:
+                                            'Public: ${post.targetAudience ?? 'all'}',
+                                      ),
+                                      _MetaChip(
+                                        icon: Icons.category_outlined,
+                                        label:
+                                            'Nature: ${post.postNature ?? 'information'}',
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    flash.summary,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                        loading: () => const SizedBox.shrink(),
+                        error: (_, _) => const SizedBox.shrink(),
+                      ),
+                      const SizedBox(height: 16),
+                      Card(
+                        margin: EdgeInsets.zero,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Actions rapides',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: FilledButton.icon(
+                                  onPressed: () {
+                                    final pre = ref
+                                        .read(postDetailAssistanceProvider)
+                                        .buildHelpRequestFromPost(post);
+                                    context.push('/create-help-request', extra: pre);
+                                  },
+                                  style: FilledButton.styleFrom(
+                                    minimumSize: const Size(double.infinity, 52),
+                                  ),
+                                  icon: const Icon(Icons.emergency_share_outlined),
+                                  label: const Text('Demander de l’aide'),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              ref.watch(postMerciStateProvider(widget.postId)).when(
+                                    data: (merci) {
+                                      final isAuthor =
+                                          user != null && user.id == post.userId;
+                                      return Row(
+                                        children: [
+                                          Expanded(
+                                            child: OutlinedButton.icon(
+                                              onPressed: (_merciBusy ||
+                                                      user == null ||
+                                                      isAuthor)
+                                                  ? null
+                                                  : _toggleMerci,
+                                              icon: _merciBusy
+                                                  ? const SizedBox(
+                                                      width: 16,
+                                                      height: 16,
+                                                      child:
+                                                          CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                      ),
+                                                    )
+                                                  : const Icon(
+                                                      Icons.volunteer_activism_outlined,
+                                                    ),
+                                              label: Text(
+                                                'Moi aussi concerné (${merci.merciCount})',
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                    loading: () => const SizedBox.shrink(),
+                                    error: (_, __) => const SizedBox.shrink(),
+                                  ),
+                              if (post.showsObstacleValidation) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: (_obstacleBusy || user == null)
+                                            ? null
+                                            : () => _voteObstacle(true),
+                                        icon: const Icon(Icons.check_circle_outline),
+                                        label: const Text('Toujours là'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: (_obstacleBusy || user == null)
+                                            ? null
+                                            : () => _voteObstacle(false),
+                                        icon: const Icon(Icons.cancel_outlined),
+                                        label: const Text('Plus là'),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      _PostAssistSection(post: post),
                       const SizedBox(height: 24),
                       // Commentaires
                       Text(
@@ -795,59 +513,44 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       ),
                       const SizedBox(height: 12),
 
-                      // Résumé flash automatique (accessibilité)
-                      flashSummaryAsync.when(
-                        data: (flash) {
-                          if (flash.summary.trim().isEmpty) return const SizedBox.shrink();
-                          return Card(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            margin: const EdgeInsets.only(bottom: 12),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Résumé rapide',
-                                    style: theme.textTheme.titleSmall?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    flash.summary,
-                                    style: theme.textTheme.bodyMedium,
-                                    softWrap: true,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                        loading: () => const SizedBox.shrink(),
-                        error: (_, _) => const SizedBox.shrink(),
-                      ),
-
                       // Liste des commentaires
                       commentsAsync.when(
                         data: (comments) {
                           if (comments.isEmpty) {
-                            return Center(
+                            return Card(
+                              margin: EdgeInsets.zero,
                               child: Padding(
-                                padding: const EdgeInsets.all(32),
-                                child: Text(
-                                  strings.noComments,
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  children: [
+                                    Icon(
+                                      Icons.chat_bubble_outline,
+                                      size: 34,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      strings.noComments,
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.bodyMedium?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             );
                           }
-                          return Column(
-                            children: comments.map((comment) {
-                              return _CommentCard(comment: comment);
-                            }).toList(),
+                          return Card(
+                            margin: EdgeInsets.zero,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                children: comments.map((comment) {
+                                  return _CommentCard(comment: comment);
+                                }).toList(),
+                              ),
+                            ),
                           );
                         },
                         loading: () => const Center(
@@ -867,56 +570,61 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   ),
                 ),
               ),
-              // Zone de commentaire
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
+                  color: theme.colorScheme.surface,
                   border: Border(
                     top: BorderSide(color: theme.colorScheme.outline),
                   ),
                 ),
                 child: SafeArea(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _commentController,
-                          decoration: InputDecoration(
-                            hintText: strings.writeComment,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(24),
+                  child: Semantics(
+                    container: true,
+                    label: 'Saisie de commentaire',
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _commentController,
+                            decoration: InputDecoration(
+                              hintText: strings.writeComment,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              filled: true,
+                              fillColor: theme.colorScheme.surfaceContainerLow,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
+                            minLines: 1,
+                            maxLines: 4,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) => _submitComment(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: _isSubmittingComment ? null : _submitComment,
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size(52, 52),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
                             ),
                           ),
-                          minLines: 1,
-                          maxLines: 4,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => _submitComment(),
+                          child: _isSubmittingComment
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.send),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        onPressed: _isSubmittingComment ? null : _submitComment,
-                        icon: _isSubmittingComment
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : Icon(Icons.send, color: primary),
-                        style: IconButton.styleFrom(
-                          backgroundColor: primary.withValues(alpha: 0.1),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          padding: const EdgeInsets.all(8),
-                          minimumSize: const Size(40, 40),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -951,6 +659,83 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Résumés accessibles + lien vers demande d’aide (couche [PostDetailAssistanceService]).
+class _PostAssistSection extends ConsumerWidget {
+  const _PostAssistSection({required this.post});
+
+  final PostModel post;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final postSummary =
+        ref.watch(postDetailAssistancePostSummaryProvider(post.id));
+    final commentsSummary =
+        ref.watch(postDetailAssistanceCommentsSummaryProvider(post.id));
+
+    return Card(
+      margin: EdgeInsets.zero,
+      color: theme.colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Aperçu accessible',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _AccessibleField(
+              label: 'Type',
+              value: post.type.displayName,
+            ),
+            _AccessibleField(
+              label: 'Nature',
+              value: post.postNature ?? 'information',
+            ),
+            const SizedBox(height: 8),
+            postSummary.when(
+              data: (r) => _AccessibleField(
+                label: 'Aperçu',
+                value: r.summary,
+              ),
+              loading: () => const LinearProgressIndicator(minHeight: 2),
+              error: (_, __) => _AccessibleField(
+                label: 'Aperçu',
+                value: 'Résumé indisponible.',
+              ),
+            ),
+            const SizedBox(height: 8),
+            commentsSummary.when(
+              data: (r) => _AccessibleField(
+                label: 'Commentaires (aperçu)',
+                value: r.summary,
+              ),
+              loading: () => const SizedBox(
+                height: 4,
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+              error: (_, __) => _AccessibleField(
+                label: 'Commentaires (aperçu)',
+                value: 'Aperçu commentaires indisponible.',
+              ),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: null,
+              icon: const Icon(Icons.volume_up_outlined),
+              label: const Text('Lecture audio (bientôt)'),
+            ),
+          ],
         ),
       ),
     );
@@ -1000,65 +785,81 @@ class _PostHeader extends StatelessWidget {
         break;
     }
 
-    return Row(
-      children: [
-        CircleAvatar(
-          radius: 24,
-          backgroundColor: typeColor.withValues(alpha: 0.12),
-          child: Icon(typeIcon, size: 24, color: typeColor),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      post.userName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: typeColor.withValues(alpha: 0.12),
+                  child: Icon(typeIcon, size: 24, color: typeColor),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        post.userName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                  ),
-                  VerifiedHelperBadge(
-                    trustPoints: post.user?.trustPoints ?? 0,
-                  ),
-                ],
-              ),
-              if (post.createdAt != null)
-                Text(
-                  _formatDate(post.createdAt!),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                      if (post.createdAt != null)
+                        Text(
+                          _formatDate(post.createdAt!),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-        ),
-        Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              color: typeColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
+                if (post.user?.partenaire == true)
+                  const PartnerOrgBadge(compact: true),
+                VerifiedHelperBadge(
+                  trustPoints: post.user?.trustPoints ?? 0,
+                ),
+              ],
             ),
-            child: Text(
-              post.type.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.end,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: typeColor,
-                fontWeight: FontWeight.bold,
-              ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _MetaChip(
+                  icon: Icons.badge_outlined,
+                  label: post.type.displayName,
+                  color: typeColor,
+                ),
+                if ((post.targetAudience ?? '').trim().isNotEmpty)
+                  _MetaChip(
+                    icon: Icons.groups_2_outlined,
+                    label: post.targetAudience!,
+                  ),
+                if ((post.postNature ?? '').trim().isNotEmpty)
+                  _MetaChip(
+                    icon: Icons.category_outlined,
+                    label: post.postNature!,
+                  ),
+                if (post.obstaclePresent)
+                  _MetaChip(
+                    icon: Icons.warning_amber_outlined,
+                    label: 'Obstacle signalé',
+                    color: primary,
+                  ),
+              ],
             ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -1125,6 +926,8 @@ class _CommentCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (comment.user?.partenaire == true)
+                        const PartnerOrgBadge(compact: true),
                       VerifiedHelperBadge(
                         trustPoints: comment.user?.trustPoints ?? 0,
                       ),
@@ -1167,6 +970,77 @@ class _CommentCard extends StatelessWidget {
     } else {
       return 'À l\'instant';
     }
+  }
+}
+
+class _MetaChip extends StatelessWidget {
+  const _MetaChip({
+    required this.icon,
+    required this.label,
+    this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = color ?? theme.colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: c),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: c,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccessibleField extends StatelessWidget {
+  const _AccessibleField({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: theme.textTheme.bodyMedium?.copyWith(height: 1.35),
+          ),
+        ],
+      ),
+    );
   }
 }
 

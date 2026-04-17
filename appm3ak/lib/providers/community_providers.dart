@@ -5,7 +5,6 @@ import '../data/models/comment_model.dart';
 import '../data/models/help_request_model.dart';
 import '../data/models/location_model.dart';
 import '../data/models/post_model.dart';
-import '../data/models/simplified_text_model.dart';
 import '../data/models/accessibility_models.dart';
 import '../data/repositories/community_repository.dart';
 import '../data/repositories/location_repository.dart';
@@ -169,17 +168,6 @@ final updateHelpRequestStatusProvider = FutureProvider.family<HelpRequestModel, 
 });
 
 // ========== ACCESSIBILITY PROVIDERS ==========
-
-final simplifyTextProvider = FutureProvider.family<SimplifiedTextModel, ({
-  String text,
-  String level,
-})>((ref, params) async {
-  final repository = ref.watch(communityRepositoryProvider);
-  return repository.simplifyText(
-    text: params.text,
-    level: params.level,
-  );
-});
 
 final commentsFlashSummaryProvider = FutureProvider.family<FlashSummaryModel, String>(
   (ref, postId) async {

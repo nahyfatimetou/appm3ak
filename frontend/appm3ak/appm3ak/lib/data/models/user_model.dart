@@ -51,6 +51,7 @@ class UserModel extends Equatable {
     this.langue = 'fr',
     this.photoProfil,
     this.statut = 'ACTIF',
+    this.partenaire = false,
     this.createdAt,
     this.updatedAt,
   });
@@ -101,6 +102,8 @@ class UserModel extends Equatable {
   final String langue;
   final String? photoProfil;
   final String statut;
+  /// Compte institutionnel / commerçant labellisé (badge Partenaire).
+  final bool partenaire;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -130,6 +133,7 @@ class UserModel extends Equatable {
         'langue': langue,
         'photoProfil': photoProfil,
         'statut': statut,
+        'partenaire': partenaire,
         'createdAt': createdAt?.toIso8601String(),
         'updatedAt': updatedAt?.toIso8601String(),
       };
@@ -152,6 +156,7 @@ class UserModel extends Equatable {
     String? langue,
     String? photoProfil,
     String? statut,
+    bool? partenaire,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) =>
@@ -173,14 +178,16 @@ class UserModel extends Equatable {
         langue: langue ?? this.langue,
         photoProfil: photoProfil ?? this.photoProfil,
         statut: statut ?? this.statut,
+        partenaire: partenaire ?? this.partenaire,
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
   bool get isBeneficiary => role == UserRole.handicape;
   bool get isCompanion => role == UserRole.accompagnant;
+  bool get isAdmin => role == UserRole.admin;
 
   @override
   List<Object?> get props =>
-      [id, nom, prenom, email, role, telephone, photoProfil, langue, trustPoints];
+      [id, nom, prenom, email, role, telephone, photoProfil, langue, trustPoints, partenaire];
 }

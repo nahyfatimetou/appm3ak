@@ -42,6 +42,7 @@ export class UserService {
       trustPoints: 0,
       statut: createUserDto.statut ?? 'ACTIF',
       langue: createUserDto.langue ?? 'fr',
+      partenaire: createUserDto.partenaire ?? false,
     });
 
     return this.toUserResponse(user);
@@ -76,17 +77,17 @@ export class UserService {
       ];
     }
 
-    const [data, total] = await Promise.all([
+    const [users, total] = await Promise.all([
       this.userModel
         .find(filter)
         .select('-password')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .exec()
-        .then((users) => users.map((u) => this.toUserResponse(u))),
+        .exec(),
       this.userModel.countDocuments(filter).exec(),
     ]);
+    const data = users.map((u: UserDocument) => this.toUserResponse(u));
 
     return {
       data,
@@ -118,12 +119,12 @@ export class UserService {
 
   async findAccompagnantsDisponibles(lat?: number, lon?: number): Promise<Omit<UserDocument, 'password'>[]> {
     const filter = { role: Role.ACCOMPAGNANT, disponible: true, statut: 'ACTIF' };
-    const accompagnants = await this.userModel
+    const accompagnants: UserDocument[] = await this.userModel
       .find(filter)
       .select('-password')
       .sort({ noteMoyenne: -1 })
       .exec();
-    return accompagnants.map((u) => this.toUserResponse(u));
+    return accompagnants.map((u: UserDocument) => this.toUserResponse(u));
   }
 
   async update(

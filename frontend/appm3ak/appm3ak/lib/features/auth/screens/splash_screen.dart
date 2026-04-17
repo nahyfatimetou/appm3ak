@@ -14,35 +14,43 @@ class SplashScreen extends ConsumerStatefulWidget {
 }
 
 class _SplashScreenState extends ConsumerState<SplashScreen> {
-  @override
-  void initState() {
-    super.initState();
-    _redirect();
-  }
+  /// Évite de programmer plusieurs redirections si le widget rebuild en AsyncData.
+  bool _navigationScheduled = false;
 
-  Future<void> _redirect() async {
-    await Future<void>.delayed(const Duration(milliseconds: 800));
-    if (!mounted) return;
-    final authState = ref.read(authStateProvider);
-    authState.when(
-      data: (user) {
-        if (user != null) {
-          context.go('/home');
-        } else {
-          context.go('/login');
-        }
-      },
-      loading: () {
-        context.go('/login');
-      },
-      error: (_, __) {
-        context.go('/login');
-      },
-    );
+  static const Duration _minSplash = Duration(milliseconds: 500);
+
+  void _scheduleRedirect(Future<void> Function() go) {
+    if (_navigationScheduled) return;
+    _navigationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future<void>.delayed(_minSplash);
+      if (!mounted) return;
+      await go();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final auth = ref.watch(authStateProvider);
+    auth.when(
+      data: (user) {
+        _scheduleRedirect(() async {
+          if (!mounted) return;
+          if (user != null) {
+            context.go('/home');
+          } else {
+            context.go('/login');
+          }
+        });
+      },
+      loading: () {},
+      error: (_, _) {
+        _scheduleRedirect(() async {
+          if (mounted) context.go('/login');
+        });
+      },
+    );
+
     final strings = AppStrings.fr();
     return Scaffold(
       body: Center(

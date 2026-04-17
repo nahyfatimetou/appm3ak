@@ -38,4 +38,10 @@ class SosRepository {
         .map((e) => SosAlertModel.fromJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  /// Répondre à une alerte (« M'y rendre ») — passe le statut à EN_ROUTE.
+  Future<SosAlertModel> respond({required String alertId}) async {
+    final response = await _api.dio.post(Endpoints.sosAlertRespond(alertId));
+    return SosAlertModel.fromJson(response.data as Map<String, dynamic>);
+  }
 }

@@ -64,12 +64,9 @@ class Endpoints {
       '/community/posts/$postId/comments';
   
   // ——— Accessibilité Universelle ———
-  static const String simplifyText = '/accessibility/simplify-text';
   static const String flashSummary = '/accessibility/flash-summary';
   static const String lsfVideo = '/accessibility/lsf-video';
   static const String universalAccessibility = '/accessibility/universal';
-  static String communityPostAnalyzeImage(String postId) =>
-      '/community/posts/$postId/analyze-image';
   static String communityPostCommentsFlashSummary(String postId) =>
       '/community/posts/$postId/comments/flash-summary';
   static const String communityHelpRequests = '/community/help-requests';

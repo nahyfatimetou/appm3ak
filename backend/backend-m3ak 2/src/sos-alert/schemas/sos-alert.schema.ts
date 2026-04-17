@@ -22,6 +22,11 @@ export class SosAlert {
   @Prop({ type: String, default: 'ENVOYEE' })
   statut: string;
 
+  /** Utilisateur qui a cliqué « M’y rendre » (secours en route). */
+  @ApiProperty({ description: 'ID du répondant', required: false })
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  responderUserId?: Types.ObjectId;
+
   @ApiProperty({ description: 'Date de création' })
   createdAt?: Date;
 }

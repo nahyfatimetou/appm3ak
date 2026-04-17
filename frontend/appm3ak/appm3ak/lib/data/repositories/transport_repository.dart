@@ -42,12 +42,12 @@ class TransportRepository {
   }) async {
     final body = <String, dynamic>{
       'typeTransport': typeTransport,
-      if (depart != null) 'depart': depart,
-      if (destination != null) 'destination': destination,
-      if (latitudeDepart != null) 'latitudeDepart': latitudeDepart,
-      if (longitudeDepart != null) 'longitudeDepart': longitudeDepart,
-      if (latitudeArrivee != null) 'latitudeArrivee': latitudeArrivee,
-      if (longitudeArrivee != null) 'longitudeArrivee': longitudeArrivee,
+      'depart': ?depart,
+      'destination': ?destination,
+      'latitudeDepart': ?latitudeDepart,
+      'longitudeDepart': ?longitudeDepart,
+      'latitudeArrivee': ?latitudeArrivee,
+      'longitudeArrivee': ?longitudeArrivee,
       if (dateHeure != null) 'dateHeure': dateHeure.toIso8601String(),
     };
     final response = await _api.dio.post(Endpoints.transport, data: body);

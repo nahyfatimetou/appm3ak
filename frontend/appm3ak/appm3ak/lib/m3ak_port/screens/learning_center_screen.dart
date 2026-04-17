@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:appm3ak/m3ak_port/services/api_service.dart';
 import 'package:appm3ak/m3ak_port/services/user_history_manager.dart';
 import 'package:appm3ak/m3ak_port/models/exercise_response.dart';
@@ -226,8 +226,9 @@ class _LearningCenterScreenState extends State<LearningCenterScreen> {
       }
     } on DioException catch (e) {
       String msg = '❌ ';
-      if (e.type == DioExceptionType.connectionTimeout) msg += 'Timeout';
-      else if (e.type == DioExceptionType.connectionError) msg += 'Impossible de se connecter';
+      if (e.type == DioExceptionType.connectionTimeout) {
+        msg += 'Timeout';
+      } else if (e.type == DioExceptionType.connectionError) msg += 'Impossible de se connecter';
       else if (e.response != null) msg += 'Status ${e.response?.statusCode}';
       else msg += e.message ?? 'Erreur inconnue';
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));

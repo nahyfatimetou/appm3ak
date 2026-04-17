@@ -81,4 +81,9 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   statut?: string;
+
+  @ApiPropertyOptional({ description: 'Compte partenaire (badge)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  partenaire?: boolean;
 }
