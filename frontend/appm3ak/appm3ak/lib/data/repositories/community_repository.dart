@@ -410,9 +410,20 @@ class CommunityRepository {
     );
   }
 
-  /// Suppression modération (admin uniquement).
-  Future<void> deletePostAdmin(String postId) async {
+  /// Supprime un post (auteur du post ou admin).
+  Future<void> deletePost(String postId) async {
     await _api.dio.delete(Endpoints.communityPostById(postId));
+  }
+
+  /// Compat legacy: conservé pour appels existants.
+  Future<void> deletePostAdmin(String postId) => deletePost(postId);
+
+  /// Supprime un commentaire d'un post (auteur commentaire, auteur post, admin).
+  Future<void> deleteComment({
+    required String postId,
+    required String commentId,
+  }) async {
+    await _api.dio.delete(Endpoints.communityPostCommentById(postId, commentId));
   }
 }
 

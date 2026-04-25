@@ -96,6 +96,70 @@ def _is_placeholder(v: Any) -> bool:
     return _norm(v) in EMPTY_PLACEHOLDERS
 
 
+def _canonical_label_value_for_compare(col: str, v: Any) -> str:
+    """
+    Normalize label cell values so duplicate-text rows compare consistently.
+    Bool-like columns map to 'true' or 'false' (aligned with train_model parsing).
+    Other columns use _norm (NFKC, lower, strip, drop invisible chars).
+    """
+    if col in BOOL_COLUMNS:
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        s = _norm(v)
+        if s in {"1", "true", "yes", "y"}:
+            return "true"
+        if s in {"0", "false", "no", "n"}:
+            return "false"
+        return s
+    return _norm(v)
+
+
+def find_duplicate_text_label_contradictions(df: pd.DataFrame) -> list[str]:
+    """
+    Rows that share the same normalized `text` must agree on every column in LABEL_COLUMNS.
+    Returns human-readable error strings (CSV row numbers are 1-based including header row).
+    """
+    errors: list[str] = []
+    if "text" not in df.columns:
+        return errors
+
+    label_cols = [c for c in LABEL_COLUMNS if c in df.columns]
+    if not label_cols:
+        return errors
+
+    keys = df["text"].map(_norm)
+    for key, indices in df.groupby(keys).groups.items():
+        idx_list = list(indices)
+        if len(idx_list) < 2:
+            continue
+
+        conflicting: list[tuple[str, dict[int, str]]] = []
+        for col in label_cols:
+            per_row = {
+                int(i): _canonical_label_value_for_compare(col, df.at[i, col]) for i in idx_list
+            }
+            if len(set(per_row.values())) > 1:
+                conflicting.append((col, per_row))
+
+        if not conflicting:
+            continue
+
+        csv_rows = sorted(int(i) + 2 for i in idx_list)
+        parts: list[str] = [
+            "[duplicate_text_contradiction]",
+            f"normalized_text={key!r}",
+            f"csv_rows={csv_rows}",
+        ]
+        for col, per_row in conflicting:
+            detail = " ".join(
+                f"row_{int(i) + 2}={per_row[i]!r}" for i in sorted(per_row.keys())
+            )
+            parts.append(f"column={col}: {detail}")
+        errors.append(" ".join(parts))
+
+    return errors
+
+
 def _action_balance_ok(action_counts: dict[str, int], total_rows: int) -> tuple[bool, str]:
     post_n = action_counts.get("create_post", 0)
     help_n = action_counts.get("create_help_request", 0)
@@ -192,6 +256,8 @@ def validate_dataset(df: pd.DataFrame) -> tuple[list[str], list[str], dict[str, 
                             f"row={idx + 2}: action=create_help_request expects '{c}' as none/empty, got '{df.at[idx, c]}'"
                         )
 
+    row_errors.extend(find_duplicate_text_label_contradictions(df))
+
     action_counts: dict[str, int] = {}
     if "actionType" in cols_available:
         action_counts = {k: int(v) for k, v in df["actionType"].value_counts().to_dict().items()}
@@ -223,6 +289,11 @@ def main() -> int:
     print(f"Header errors: {len(header_errors)}")
     print(f"Invalid rows count: {invalid_rows}")
     print(f"Detailed row error lines: {len(row_errors)}")
+    dup_txt_contra = sum(
+        1 for e in row_errors if "[duplicate_text_contradiction]" in e
+    )
+    if dup_txt_contra:
+        print(f"Duplicate-text label contradictions: {dup_txt_contra}")
 
     if header_errors:
         print("\nHeader issues:")
@@ -231,7 +302,9 @@ def main() -> int:
 
     if row_errors:
         print("\nSample row errors (up to 25):")
-        for e in row_errors[:25]:
+        priority = [e for e in row_errors if "[duplicate_text_contradiction]" in e]
+        rest = [e for e in row_errors if e not in priority]
+        for e in (priority + rest)[:25]:
             print(f"  - {e}")
 
     failed = bool(header_errors or row_errors or not balance_ok)

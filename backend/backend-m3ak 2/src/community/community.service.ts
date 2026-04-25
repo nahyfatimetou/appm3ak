@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
@@ -360,14 +361,54 @@ export class CommunityService {
       });
   }
 
-  async deletePostAsAdmin(postId: string) {
+  private isAdminRole(role?: string | null): boolean {
+    return (role ?? '').toString().toUpperCase() === Role.ADMIN;
+  }
+
+  async deletePost(postId: string, actorUserId: string, actorRole?: string | null) {
     const post = await this.postModel.findById(postId).exec();
     if (!post) throw new NotFoundException('Post non trouvé');
+    const isOwner = post.userId.toString() === actorUserId;
+    if (!isOwner && !this.isAdminRole(actorRole)) {
+      throw new ForbiddenException(
+        'Seul l’auteur du post (ou un administrateur) peut supprimer ce post',
+      );
+    }
     await this.commentModel.deleteMany({
       postId: new Types.ObjectId(postId),
     });
     await this.postModel.findByIdAndDelete(postId).exec();
     return { deleted: true, id: postId };
+  }
+
+  async deleteComment(
+    postId: string,
+    commentId: string,
+    actorUserId: string,
+    actorRole?: string | null,
+  ) {
+    const [post, comment] = await Promise.all([
+      this.postModel.findById(postId).select('_id userId').exec(),
+      this.commentModel.findById(commentId).select('_id postId userId').exec(),
+    ]);
+
+    if (!post) throw new NotFoundException('Post non trouvé');
+    if (!comment) throw new NotFoundException('Commentaire non trouvé');
+    if (comment.postId.toString() !== postId) {
+      throw new BadRequestException('Le commentaire ne correspond pas à ce post');
+    }
+
+    const isCommentAuthor = comment.userId.toString() === actorUserId;
+    const isPostOwner = post.userId.toString() === actorUserId;
+    const isAdmin = this.isAdminRole(actorRole);
+    if (!isCommentAuthor && !isPostOwner && !isAdmin) {
+      throw new ForbiddenException(
+        'Suppression refusée: auteur du commentaire, auteur du post ou administrateur uniquement',
+      );
+    }
+
+    await this.commentModel.findByIdAndDelete(commentId).exec();
+    return { deleted: true, id: commentId };
   }
 
   async getPosts(page = 1, limit = 20, type?: string) {

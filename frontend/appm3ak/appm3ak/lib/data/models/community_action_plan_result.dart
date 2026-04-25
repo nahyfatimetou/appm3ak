@@ -25,6 +25,10 @@ class CommunityActionPlanResult {
     this.recommendedRoute,
     this.routeReason,
     this.confidence,
+    this.routeConfidence,
+    this.decisionStrength,
+    this.requiresConfirmation,
+    this.decisionSummary,
   });
 
   final String action;
@@ -54,6 +58,18 @@ class CommunityActionPlanResult {
   final String? routeReason;
   final double? confidence;
 
+  /// Heuristic: fit of [recommendedRoute] given modes + wording (not calibrated probability).
+  final double? routeConfidence;
+
+  /// How clear the resolved action is (wording + model agreement).
+  final double? decisionStrength;
+
+  /// When true, prefer confirming with the user instead of auto-navigation.
+  final bool? requiresConfirmation;
+
+  /// Short French explanation for UI (non-clinical wording).
+  final String? decisionSummary;
+
   factory CommunityActionPlanResult.fromJson(Map<String, dynamic> json) {
     return CommunityActionPlanResult(
       action: json['action'] as String? ?? 'create_post',
@@ -78,10 +94,23 @@ class CommunityActionPlanResult {
       recommendedRoute: json['recommendedRoute'] as String?,
       routeReason: json['routeReason'] as String?,
       confidence: (json['confidence'] as num?)?.toDouble(),
+      routeConfidence: (json['routeConfidence'] as num?)?.toDouble(),
+      decisionStrength: (json['decisionStrength'] as num?)?.toDouble(),
+      requiresConfirmation: json['requiresConfirmation'] as bool?,
+      decisionSummary: json['decisionSummary'] as String?,
     );
   }
 
   bool shouldAutoNavigate({double minConfidence = 0.85}) {
+    if (requiresConfirmation == true) return false;
+    final route = recommendedRoute?.trim();
+    final conf = confidence;
+    return route != null && route.isNotEmpty && conf != null && conf >= minConfidence;
+  }
+
+  /// Comme [shouldAutoNavigate] sans tenir compte de [requiresConfirmation],
+  /// pour décider si le seuil de confiance suffit à une ouverture directe (écran d’entrée IA).
+  bool shouldAutoNavigateForEntryScreen({double minConfidence = 0.85}) {
     final route = recommendedRoute?.trim();
     final conf = confidence;
     return route != null && route.isNotEmpty && conf != null && conf >= minConfidence;
@@ -123,5 +152,34 @@ class CommunityActionPlanResult {
       presetMessageKey: presetMessageKey,
     );
   }
+}
+
+/// Extrait le chemin seul (sans query) depuis une route GoRouter ou une URL complète.
+String communityActionPlanPathOnly(String? recommendedRoute) {
+  final raw = recommendedRoute?.trim() ?? '';
+  if (raw.isEmpty) return '';
+  if (raw.contains('://')) {
+    return Uri.parse(raw).path;
+  }
+  final q = raw.indexOf('?');
+  final pathPart = q >= 0 ? raw.substring(0, q) : raw;
+  return pathPart.isEmpty ? '/' : pathPart;
+}
+
+String _trimTrailingSlash(String p) {
+  if (p.length > 1 && p.endsWith('/')) {
+    return p.substring(0, p.length - 1);
+  }
+  return p;
+}
+
+/// Indique si la route IA pointe vers le même écran que [locationPath] (GoRouter).
+bool communityActionRecommendedRouteMatchesLocation(
+  String? recommendedRoute,
+  String locationPath,
+) {
+  final a = _trimTrailingSlash(communityActionPlanPathOnly(recommendedRoute));
+  final b = _trimTrailingSlash(locationPath.trim());
+  return a.isNotEmpty && b.isNotEmpty && a == b;
 }
 

@@ -79,6 +79,8 @@ class Endpoints {
       '/community/posts/$postId/validate-obstacle';
   static String communityPostComments(String postId) =>
       '/community/posts/$postId/comments';
+  static String communityPostCommentById(String postId, String commentId) =>
+      '/community/posts/$postId/comments/$commentId';
   static String communityPostCommentsFlashSummary(String postId) =>
       '/community/posts/$postId/comments/flash-summary';
   static const String communityAiActionPlan = '/community/ai/action-plan';

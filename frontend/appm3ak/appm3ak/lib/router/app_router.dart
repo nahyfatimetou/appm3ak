@@ -188,6 +188,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               initialContent: extra.initialContent,
               autoOpenCamera: extra.autoOpenCamera,
               autoPublishAfterCamera: extra.autoPublishAfterCamera,
+              accessibilityAnnounceGalleryVolumeOrCameraFallback:
+                  extra.accessibilityAnnounceGalleryVolumeOrCameraFallback,
             );
           }
           if (extra is AccessibilityPostHandoff) {
@@ -216,7 +218,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/post-detail/:id',
         builder: (context, state) {
           final id = state.pathParameters['id'] ?? '';
-          return PostDetailScreen(postId: id);
+          final q = state.uri.queryParameters;
+          final autoReadPost = q['autoReadPost'] == '1';
+          final autoReadComments = q['autoReadComments'] == '1';
+          final autoReadSummary = q['autoReadSummary'] == '1';
+          return PostDetailScreen(
+            postId: id,
+            autoReadPost: autoReadPost,
+            autoReadComments: autoReadComments,
+            autoReadSummary: autoReadSummary,
+          );
         },
       ),
       // Routes pour Help Requests

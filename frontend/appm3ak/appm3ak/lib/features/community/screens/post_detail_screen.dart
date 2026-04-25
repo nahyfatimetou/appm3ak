@@ -1,11 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../../core/enums/type_handicap.dart';
 import '../../../core/l10n/app_strings.dart';
+import '../../accessibility/accessibility_post_prefs.dart';
 import '../../../data/models/comment_model.dart';
 import '../../../data/models/post_model.dart';
 import '../../../data/repositories/community_repository.dart';
@@ -13,12 +18,22 @@ import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
 import '../../../providers/post_detail_assistance_provider.dart';
 import '../../../widgets/verified_helper_badge.dart';
+import '../logic/post_detail_danger_hint.dart';
 
 /// Écran de détails d'un post avec commentaires.
 class PostDetailScreen extends ConsumerStatefulWidget {
-  const PostDetailScreen({required this.postId, super.key});
+  const PostDetailScreen({
+    required this.postId,
+    this.autoReadPost = false,
+    this.autoReadComments = false,
+    this.autoReadSummary = false,
+    super.key,
+  });
 
   final String postId;
+  final bool autoReadPost;
+  final bool autoReadComments;
+  final bool autoReadSummary;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -27,15 +42,69 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _commentController = TextEditingController();
   final FlutterTts _flutterTts = FlutterTts();
+  final stt.SpeechToText _commentSpeech = stt.SpeechToText();
   bool _isSubmittingComment = false;
-  bool _merciBusy = false;
-  bool _obstacleBusy = false;
-  String? _lastSpokenPostKey;
+  bool _speechReady = false;
+  bool _isCommentListening = false;
+  String _commentLocaleId = 'fr_FR';
+  List<CommentModel> _ttsCommentsContext = const [];
+  int _ttsCommentIndex = -1;
+  bool _deletePostBusy = false;
+  String? _deletingCommentId;
+  /// Évite une double lecture auto si le widget rebuild avant la fin du TTS.
+  String? _lastAutoSpeakDedupKey;
+  /// Une seule planification auto par chargement de post (évite les callbacks empilés).
+  String? _autoSpeakScheduledPostId;
+  bool _isTtsSpeaking = false;
+  bool _autoReadPrefLoaded = false;
+  bool _autoReadSwitchOn = false;
+  /// 0 lent, 1 normal, 2 rapide — [AccessibilityPostPrefs.postDetailTtsRateIndex].
+  int _ttsRateIndex = 1;
+  bool _simplifiedUi = false;
+  bool _ttsPaused = false;
+  String? _ttsResumeText;
+  String? _autoActionDedupKey;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _initTts());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadPostDetailAccessibilityPrefs());
+  }
+
+  @override
+  void didUpdateWidget(PostDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.postId != widget.postId) {
+      _lastAutoSpeakDedupKey = null;
+      _autoSpeakScheduledPostId = null;
+      _autoActionDedupKey = null;
+    }
+  }
+
+  Future<void> _runRouteAutoActions(PostModel post) async {
+    final dedup =
+        '${post.id}|${widget.autoReadPost}|${widget.autoReadComments}|${widget.autoReadSummary}';
+    if (_autoActionDedupKey == dedup) return;
+    _autoActionDedupKey = dedup;
+    if (widget.autoReadPost) {
+      await _speakDescription(_ttsReadableForPost(post));
+    }
+    if (widget.autoReadComments) {
+      final comments = await ref.read(postCommentsProvider(widget.postId).future);
+      if (comments.isNotEmpty) {
+        await _readAllComments(comments);
+      }
+    }
+    if (widget.autoReadSummary) {
+      final r = await ref.read(
+        postDetailAssistancePostSummaryProvider(widget.postId).future,
+      );
+      final summary = r.summary.trim();
+      if (summary.isNotEmpty) {
+        await _speakDescription(summary);
+      }
+    }
   }
 
   Future<void> _initTts() async {
@@ -43,29 +112,292 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     await _flutterTts.setSpeechRate(0.45);
     await _flutterTts.setVolume(1.0);
     await _flutterTts.setPitch(1.0);
+    _flutterTts.setCompletionHandler(() {
+      if (!mounted) return;
+      setState(() {
+        _isTtsSpeaking = false;
+        if (!_ttsPaused) _ttsResumeText = null;
+      });
+    });
+    _flutterTts.setCancelHandler(() {
+      if (!mounted) return;
+      setState(() => _isTtsSpeaking = false);
+    });
+    _flutterTts.setErrorHandler((_) {
+      if (!mounted) return;
+      setState(() => _isTtsSpeaking = false);
+    });
+  }
+
+  Future<void> _loadPostDetailAccessibilityPrefs() async {
+    if (_autoReadPrefLoaded) return;
+    final user = ref.read(authStateProvider).valueOrNull;
+    final visual =
+        TypeHandicap.fromApiString(user?.typeHandicap) == TypeHandicap.visuel;
+    final on = await AccessibilityPostPrefs.effectivePostDetailAutoRead(
+      visualProfileDefault: visual,
+    );
+    final rateIdx = await AccessibilityPostPrefs.postDetailTtsRateIndex();
+    final simple = await AccessibilityPostPrefs.postDetailSimplifiedUi();
+    if (!mounted) return;
+    setState(() {
+      _autoReadPrefLoaded = true;
+      _autoReadSwitchOn = on;
+      _ttsRateIndex = rateIdx;
+      _simplifiedUi = simple;
+    });
+    await _applySpeechRate();
+  }
+
+  Future<void> _setSimplifiedUi(bool value) async {
+    await AccessibilityPostPrefs.setPostDetailSimplifiedUi(value);
+    if (!mounted) return;
+    setState(() => _simplifiedUi = value);
+  }
+
+  Future<void> _applySpeechRate() async {
+    final r = AccessibilityPostPrefs.speechRateForTtsIndex(_ttsRateIndex);
+    await _flutterTts.setSpeechRate(r);
+  }
+
+  Future<void> _setTtsRateIndex(int index) async {
+    final i = index.clamp(0, 2);
+    await AccessibilityPostPrefs.setPostDetailTtsRateIndex(i);
+    if (!mounted) return;
+    setState(() => _ttsRateIndex = i);
+    await _applySpeechRate();
+  }
+
+  Future<void> _setAutoReadEnabled(bool value) async {
+    await AccessibilityPostPrefs.setPostDetailAutoReadEnabled(value);
+    if (!mounted) return;
+    setState(() {
+      _autoReadSwitchOn = value;
+      _autoReadPrefLoaded = true;
+    });
   }
 
   @override
   void dispose() {
+    unawaited(_commentSpeech.stop());
     _flutterTts.stop();
     _commentController.dispose();
     super.dispose();
   }
 
+  Future<void> _ensureCommentSpeechReady() async {
+    if (_speechReady) return;
+    if (kIsWeb) return;
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Autorisez le micro pour dicter un commentaire.')),
+      );
+      return;
+    }
+    final ok = await _commentSpeech.initialize(
+      onError: (_) {
+        if (!mounted) return;
+        setState(() {
+          _speechReady = false;
+          _isCommentListening = false;
+        });
+      },
+      onStatus: (status) {
+        if (!mounted) return;
+        if (status == 'done' || status == 'notListening') {
+          setState(() => _isCommentListening = false);
+        }
+      },
+    );
+    var localeId = 'fr_FR';
+    try {
+      final locales = await _commentSpeech.locales();
+      final fr = locales.firstWhere(
+        (l) => l.localeId.toLowerCase().startsWith('fr'),
+        orElse: () => locales.isNotEmpty
+            ? locales.first
+            : stt.LocaleName('fr_FR', 'French'),
+      );
+      localeId = fr.localeId;
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _speechReady = ok;
+      _commentLocaleId = localeId;
+    });
+  }
+
+  Future<void> _toggleCommentVoiceInput() async {
+    if (kIsWeb) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La dictée commentaire nécessite l’application mobile.')),
+      );
+      return;
+    }
+    if (_isCommentListening) {
+      await _commentSpeech.stop();
+      if (mounted) setState(() => _isCommentListening = false);
+      return;
+    }
+    await _ensureCommentSpeechReady();
+    if (!_speechReady || !mounted) return;
+    setState(() => _isCommentListening = true);
+    try {
+      await _commentSpeech.listen(
+        localeId: _commentLocaleId,
+        listenFor: const Duration(seconds: 45),
+        pauseFor: const Duration(seconds: 3),
+        listenOptions: stt.SpeechListenOptions(
+          partialResults: true,
+          listenMode: stt.ListenMode.dictation,
+        ),
+        onResult: (r) {
+          if (!mounted) return;
+          final text = r.recognizedWords.trim();
+          if (text.isEmpty) return;
+          setState(() {
+            _commentController.text = text;
+            _commentController.selection = TextSelection.fromPosition(
+              TextPosition(offset: _commentController.text.length),
+            );
+          });
+          if (r.finalResult) {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(content: Text('Votre commentaire vocal est prêt.')),
+            );
+          }
+        },
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isCommentListening = false);
+    }
+  }
+
+  Future<void> _retryCommentVoiceInput() async {
+    if (_isCommentListening) {
+      await _commentSpeech.stop();
+      if (mounted) setState(() => _isCommentListening = false);
+    }
+    if (!mounted) return;
+    _commentController.clear();
+    await _toggleCommentVoiceInput();
+  }
+
+  Future<void> _cancelCommentVoiceInput() async {
+    if (_isCommentListening) {
+      await _commentSpeech.stop();
+    }
+    if (!mounted) return;
+    setState(() {
+      _isCommentListening = false;
+      _commentController.clear();
+    });
+  }
+
+  String _commentReadableLine(CommentModel c, int idx, int total) {
+    final name = c.userName.trim().isEmpty ? 'Utilisateur' : c.userName.trim();
+    return 'Commentaire ${idx + 1} sur $total. $name. ${c.contenu.trim()}';
+  }
+
+  Future<void> _readCommentAtIndex(List<CommentModel> comments, int index) async {
+    if (comments.isEmpty) return;
+    final safe = index.clamp(0, comments.length - 1);
+    if (_ttsCommentIndex == -1 || _ttsCommentsContext.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Lecture des commentaires commencée.')),
+      );
+    }
+    setState(() {
+      _ttsCommentsContext = List<CommentModel>.from(comments);
+      _ttsCommentIndex = safe;
+    });
+    await _speakDescription(_commentReadableLine(
+      comments[safe],
+      safe,
+      comments.length,
+    ));
+  }
+
+  Future<void> _readAllComments(List<CommentModel> comments) async {
+    if (comments.isEmpty) return;
+    setState(() {
+      _ttsCommentsContext = List<CommentModel>.from(comments);
+      _ttsCommentIndex = 0;
+    });
+    final text = comments
+        .asMap()
+        .entries
+        .map((e) => _commentReadableLine(e.value, e.key, comments.length))
+        .join(' ');
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('Lecture des commentaires commencée.')),
+    );
+    await _speakDescription(text);
+  }
+
+  Future<void> _readPreviousComment() async {
+    if (_ttsCommentsContext.isEmpty) return;
+    final prev = (_ttsCommentIndex <= 0) ? 0 : _ttsCommentIndex - 1;
+    await _readCommentAtIndex(_ttsCommentsContext, prev);
+  }
+
+  Future<void> _readNextComment() async {
+    if (_ttsCommentsContext.isEmpty) return;
+    final next = (_ttsCommentIndex < 0)
+        ? 0
+        : (_ttsCommentIndex >= _ttsCommentsContext.length - 1)
+            ? _ttsCommentsContext.length - 1
+            : _ttsCommentIndex + 1;
+    await _readCommentAtIndex(_ttsCommentsContext, next);
+  }
+
+  Future<void> _replayCurrentComment() async {
+    if (_ttsCommentsContext.isEmpty || _ttsCommentIndex < 0) return;
+    await _readCommentAtIndex(_ttsCommentsContext, _ttsCommentIndex);
+  }
+
+  String _ttsReadableForPost(PostModel post) {
+    return ref.read(postDetailAssistanceProvider).buildTtsReadablePost(post);
+  }
+
+  Future<void> _runAutoSpeakIfEligible(PostModel post) async {
+    await _loadPostDetailAccessibilityPrefs();
+    if (!mounted || !_autoReadSwitchOn) return;
+    final t = _ttsReadableForPost(post).trim();
+    if (t.isEmpty) return;
+    final dedupKey = '${post.id}|${t.hashCode}';
+    if (_lastAutoSpeakDedupKey == dedupKey) return;
+    _lastAutoSpeakDedupKey = dedupKey;
+    await _speakDescription(t);
+  }
 
   Future<void> _speakDescription(String text) async {
     final t = text.trim();
     if (t.isEmpty) return;
     try {
+      _ttsResumeText = t;
+      _ttsPaused = false;
       // Langue TTS selon préférence utilisateur (FR/AR).
       final user = ref.read(authStateProvider).valueOrNull;
       final lang = (user?.preferredLanguage?.name ?? '').toLowerCase();
       final ttsLang = lang == 'ar' ? 'ar' : 'fr-FR';
       await _flutterTts.stop();
+      if (mounted) {
+        setState(() {
+          _isTtsSpeaking = true;
+          _ttsPaused = false;
+        });
+      }
+      await _applySpeechRate();
       await _flutterTts.setLanguage(ttsLang);
       await _flutterTts.speak(t);
     } catch (e) {
       if (!mounted) return;
+      setState(() => _isTtsSpeaking = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -75,6 +407,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _stopTts() async {
+    await _flutterTts.stop();
+    if (mounted) {
+      setState(() {
+        _isTtsSpeaking = false;
+        _ttsPaused = false;
+        _ttsResumeText = null;
+      });
+    }
+  }
+
+  Future<void> _pauseTts() async {
+    if (!_isTtsSpeaking) return;
+    await _flutterTts.stop();
+    if (mounted) {
+      setState(() {
+        _isTtsSpeaking = false;
+        _ttsPaused = true;
+      });
     }
   }
 
@@ -110,67 +464,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     }
   }
 
-  Future<void> _toggleMerci() async {
-    if (_merciBusy) return;
-    final user = ref.read(authStateProvider).valueOrNull;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Connectez-vous pour remercier ce signalement.')),
-      );
-      return;
-    }
-    setState(() => _merciBusy = true);
-    try {
-      await ref.read(communityRepositoryProvider).togglePostMerci(widget.postId);
-      ref.invalidate(postMerciStateProvider(widget.postId));
-      ref.invalidate(postByIdProvider(widget.postId));
-      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: false)));
-      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: true)));
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _merciBusy = false);
-    }
-  }
-
-  Future<void> _voteObstacle(bool confirm) async {
-    if (_obstacleBusy) return;
-    final user = ref.read(authStateProvider).valueOrNull;
-    if (user == null) return;
-    setState(() => _obstacleBusy = true);
-    try {
-      await ref.read(communityRepositoryProvider).validatePostObstacle(
-            postId: widget.postId,
-            confirm: confirm,
-          );
-      ref.invalidate(postByIdProvider(widget.postId));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Merci, votre avis est enregistré.')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _obstacleBusy = false);
-    }
-  }
-
-  Future<void> _confirmDeletePostAsAdmin() async {
+  Future<void> _confirmDeletePost() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Modération'),
+        title: const Text('Supprimer ce post'),
         content: const Text(
-          'Supprimer ce post du flux ? (spam ou contenu inapproprié)',
+          'Voulez-vous vraiment supprimer ce post ? Cette action est définitive.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Annuler')),
@@ -182,10 +482,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       ),
     );
     if (ok != true || !mounted) return;
+    setState(() => _deletePostBusy = true);
     try {
-      await ref.read(communityRepositoryProvider).deletePostAdmin(widget.postId);
+      await ref.read(communityRepositoryProvider).deletePost(widget.postId);
       ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: false)));
       ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: true)));
+      ref.invalidate(postByIdProvider(widget.postId));
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) {
@@ -193,6 +495,61 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
         );
       }
+    } finally {
+      if (mounted) setState(() => _deletePostBusy = false);
+    }
+  }
+
+  bool _canDeleteComment({
+    required PostModel post,
+    required CommentModel comment,
+    required dynamic user,
+  }) {
+    if (user == null) return false;
+    return user.isAdmin == true ||
+        comment.userId == user.id ||
+        post.userId == user.id;
+  }
+
+  Future<void> _confirmDeleteComment({
+    required PostModel post,
+    required CommentModel comment,
+  }) async {
+    if (_deletingCommentId != null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Supprimer ce commentaire'),
+        content: const Text('Confirmer la suppression de ce commentaire ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _deletingCommentId = comment.id);
+    try {
+      await ref.read(communityRepositoryProvider).deleteComment(
+            postId: post.id,
+            commentId: comment.id,
+          );
+      ref.invalidate(postCommentsProvider(widget.postId));
+      ref.invalidate(postByIdProvider(widget.postId));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _deletingCommentId = null);
     }
   }
 
@@ -202,13 +559,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     final strings =
         AppStrings.fromPreferredLanguage(user?.preferredLanguage?.name);
     final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
 
     final postAsync = ref.watch(postByIdProvider(widget.postId));
     final commentsAsync = ref.watch(postCommentsProvider(widget.postId));
-    final flashSummaryAsync =
-        ref.watch(postCommentsFlashSummaryProvider(widget.postId));
-    ref.watch(postMerciStateProvider(widget.postId));
+    final assistedSummaryAsync =
+        ref.watch(postDetailAssistancePostSummaryProvider(widget.postId));
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -216,12 +571,23 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       appBar: AppBar(
         title: Text(strings.postDetails),
         actions: [
+          IconButton(
+            tooltip: _simplifiedUi
+                ? 'Affichage habituel'
+                : 'Interface simplifiée (gros texte, moins de détail)',
+            icon: Icon(
+              _simplifiedUi
+                  ? Icons.view_compact_alt_outlined
+                  : Icons.accessibility_new,
+            ),
+            onPressed: () => _setSimplifiedUi(!_simplifiedUi),
+          ),
           if (user?.isAdmin == true)
             PopupMenuButton<String>(
               icon: const Icon(Icons.admin_panel_settings_outlined),
               tooltip: 'Modération',
               onSelected: (v) {
-                if (v == 'delete') _confirmDeletePostAsAdmin();
+                if (v == 'delete') _confirmDeletePost();
               },
               itemBuilder: (ctx) => const [
                 PopupMenuItem(
@@ -239,22 +605,41 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       ),
       body: postAsync.when(
         data: (post) {
-          final handicap = TypeHandicap.fromApiString(user?.typeHandicap);
-          final wantsTts = handicap == TypeHandicap.visuel;
-
           final hasContent = post.contenu.trim().isNotEmpty;
+          final canDeletePost = user != null &&
+              (user.isAdmin == true || post.userId == user.id);
+          final dangerMsg = postDetailDangerBannerMessage(post);
+          final pad = _simplifiedUi ? 20.0 : 16.0;
+          final sectionTitleStyle = _simplifiedUi
+              ? theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 20,
+                )
+              : theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                );
+          final bodyStyle = _simplifiedUi
+              ? theme.textTheme.bodyLarge?.copyWith(
+                  fontSize: 18,
+                  height: 1.35,
+                  fontWeight: FontWeight.w500,
+                )
+              : theme.textTheme.bodyLarge?.copyWith(height: 1.45);
 
-          // Lecture automatique du texte du post pour les utilisateurs
-          // handicap visuel (non-voyants), une seule fois par ouverture.
-          if (wantsTts && hasContent) {
-            final ttsText =
-                ref.read(postDetailAssistanceProvider).buildTtsReadablePost(post);
-            final postKey = '${post.id}|${ttsText.hashCode}';
+          /// Lecture auto une fois les données disponibles (préférence profil ou réglage).
+          if (hasContent && _autoSpeakScheduledPostId != post.id) {
+            _autoSpeakScheduledPostId = post.id;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              await _runAutoSpeakIfEligible(post);
+            });
+          }
+          if ((widget.autoReadPost ||
+                  widget.autoReadComments ||
+                  widget.autoReadSummary) &&
+              _autoActionDedupKey == null) {
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               if (!mounted) return;
-              if (_lastSpokenPostKey == postKey) return;
-              _lastSpokenPostKey = postKey;
-              await _speakDescription(ttsText);
+              await _runRouteAutoActions(post);
             });
           }
 
@@ -265,245 +650,392 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
                   physics: const ClampingScrollPhysics(),
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.all(pad),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _PostHeader(post: post),
+                      if (dangerMsg != null) ...[
+                        const SizedBox(height: 14),
+                        Semantics(
+                          liveRegion: true,
+                          child: Material(
+                            color: theme.colorScheme.errorContainer,
+                            borderRadius: BorderRadius.circular(14),
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: theme.colorScheme.onErrorContainer,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      dangerMsg,
+                                      style: theme.textTheme.bodyMedium?.copyWith(
+                                        color: theme.colorScheme.onErrorContainer,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       Card(
                         margin: EdgeInsets.zero,
+                        elevation: _simplifiedUi ? 1.5 : 0.5,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          side: BorderSide(
+                            color: theme.colorScheme.outline
+                                .withValues(alpha: 0.28),
+                          ),
+                        ),
                         child: Padding(
-                          padding: const EdgeInsets.all(16),
+                          padding: EdgeInsets.all(_simplifiedUi ? 18 : 16),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Semantics(
                                 header: true,
                                 child: Text(
-                                  'Contenu du post',
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                  _simplifiedUi ? 'Texte du post' : 'Contenu du post',
+                                  style: sectionTitleStyle,
                                 ),
                               ),
                               const SizedBox(height: 10),
                               Text(
                                 post.contenu,
-                                style: theme.textTheme.bodyLarge?.copyWith(
-                                  height: 1.45,
-                                ),
+                                style: bodyStyle,
                                 softWrap: true,
                               ),
-                              if (wantsTts) ...[
+                              if (post.images != null && post.images!.isNotEmpty) ...[
                                 const SizedBox(height: 12),
-                                FilledButton.tonalIcon(
-                                  onPressed: () => _speakDescription(
-                                    ref
-                                        .read(postDetailAssistanceProvider)
-                                        .buildTtsReadablePost(post),
+                                ...post.images!.map((path) {
+                                  final url = CommunityRepository.uploadUrl(path);
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Image.network(
+                                        url,
+                                        width: double.infinity,
+                                        fit: BoxFit.cover,
+                                        loadingBuilder: (_, child, progress) {
+                                          if (progress == null) return child;
+                                          return SizedBox(
+                                            height: 180,
+                                            child: Center(
+                                              child: CircularProgressIndicator(
+                                                value: progress.expectedTotalBytes != null
+                                                    ? progress.cumulativeBytesLoaded /
+                                                        progress.expectedTotalBytes!
+                                                    : null,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        errorBuilder: (_, _, _) => Container(
+                                          height: 120,
+                                          color: theme.colorScheme.surfaceContainerHighest,
+                                          alignment: Alignment.center,
+                                          child: const Icon(Icons.broken_image),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                              const SizedBox(height: 12),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Semantics(
+                                  hint:
+                                      'Active ou désactive la lecture vocale automatique '
+                                      'du post à l\'ouverture.',
+                                  child: Text(
+                                    'Lecture automatique à l\'ouverture',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
-                                  style: FilledButton.styleFrom(
-                                    minimumSize: const Size(170, 48),
+                                ),
+                                subtitle: Text(
+                                  _autoReadPrefLoaded
+                                      ? 'Une fois le post affiché. Par défaut actif '
+                                          'pour les profils malvoyants jusqu’à votre choix.'
+                                      : 'Chargement du réglage…',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
                                   ),
-                                  icon: const Icon(Icons.volume_up_outlined),
-                                  label: const Text('Lire le texte'),
+                                ),
+                                value: _autoReadSwitchOn,
+                                onChanged: !_autoReadPrefLoaded || !hasContent
+                                    ? null
+                                    : _setAutoReadEnabled,
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Semantics(
+                                      button: true,
+                                      label: hasContent
+                                          ? 'Lire le post avec la synthèse vocale'
+                                          : 'Contenu vide',
+                                      child: FilledButton.tonalIcon(
+                                        onPressed: !hasContent ||
+                                                (_isTtsSpeaking && !_ttsPaused)
+                                            ? null
+                                            : () {
+                                                if (_ttsPaused &&
+                                                    _ttsResumeText != null) {
+                                                  _speakDescription(
+                                                    _ttsResumeText!,
+                                                  );
+                                                } else {
+                                                  _speakDescription(
+                                                    _ttsReadableForPost(post),
+                                                  );
+                                                }
+                                              },
+                                        style: FilledButton.styleFrom(
+                                          minimumSize: Size(
+                                            double.infinity,
+                                            _simplifiedUi ? 54 : 48,
+                                          ),
+                                        ),
+                                        icon: Icon(
+                                          _ttsPaused
+                                              ? Icons.play_arrow_rounded
+                                              : Icons.volume_up_rounded,
+                                          color: theme.colorScheme.primary,
+                                        ),
+                                        label: Text(
+                                          _ttsPaused
+                                              ? 'Reprendre'
+                                              : '\u{1F50A} Lire le post',
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Semantics(
+                                    button: true,
+                                    label: 'Pause lecture vocale',
+                                    child: IconButton.filledTonal(
+                                      tooltip: 'Pause',
+                                      icon: const Icon(Icons.pause_rounded),
+                                      style: IconButton.styleFrom(
+                                        minimumSize: Size(
+                                          52,
+                                          _simplifiedUi ? 54 : 48,
+                                        ),
+                                      ),
+                                      onPressed: (_isTtsSpeaking && !_ttsPaused)
+                                          ? _pauseTts
+                                          : null,
+                                    ),
+                                  ),
+                                  Semantics(
+                                    button: true,
+                                    label: 'Arrêter la synthèse vocale',
+                                    child: IconButton.filledTonal(
+                                      tooltip: 'Arrêter',
+                                      icon: const Icon(Icons.stop_circle_outlined),
+                                      style: IconButton.styleFrom(
+                                        minimumSize: Size(
+                                          52,
+                                          _simplifiedUi ? 54 : 48,
+                                        ),
+                                      ),
+                                      onPressed: (_isTtsSpeaking || _ttsPaused)
+                                          ? _stopTts
+                                          : null,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (_autoReadPrefLoaded) ...[
+                                const SizedBox(height: 14),
+                                Text(
+                                  'Vitesse de la voix',
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Semantics(
+                                  label:
+                                      'Choisir la vitesse de lecture : lent, normal ou rapide',
+                                  child: SegmentedButton<int>(
+                                    segments: const [
+                                      ButtonSegment<int>(
+                                        value: 0,
+                                        label: Text('Lent'),
+                                        icon: Icon(Icons.slow_motion_video_outlined),
+                                      ),
+                                      ButtonSegment<int>(
+                                        value: 1,
+                                        label: Text('Normal'),
+                                      ),
+                                      ButtonSegment<int>(
+                                        value: 2,
+                                        label: Text('Rapide'),
+                                        icon: Icon(Icons.fast_forward_outlined),
+                                      ),
+                                    ],
+                                    selected: {_ttsRateIndex},
+                                    onSelectionChanged: (s) {
+                                      final v = s.first;
+                                      _setTtsRateIndex(v);
+                                    },
+                                  ),
                                 ),
                               ],
                             ],
                           ),
                         ),
                       ),
-                      if (post.images != null && post.images!.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        ...post.images!.map((path) {
-                          final url = CommunityRepository.uploadUrl(path);
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.network(
-                                url,
-                                width: double.infinity,
-                                fit: BoxFit.cover,
-                                loadingBuilder: (_, child, progress) {
-                                  if (progress == null) return child;
-                                  return SizedBox(
-                                    height: 200,
-                                    child: Center(
-                                      child: CircularProgressIndicator(
-                                        value: progress.expectedTotalBytes !=
-                                                null
-                                            ? progress.cumulativeBytesLoaded /
-                                                progress.expectedTotalBytes!
-                                            : null,
-                                      ),
-                                    ),
-                                  );
-                                },
-                                errorBuilder: (_, _, _) => Container(
-                                  height: 120,
-                                  color: theme
-                                      .colorScheme.surfaceContainerHighest,
-                                  alignment: Alignment.center,
-                                  child: const Icon(Icons.broken_image),
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
                       const SizedBox(height: 16),
-                      flashSummaryAsync.when(
-                        data: (flash) {
-                          if (flash.summary.trim().isEmpty) return const SizedBox.shrink();
+                      assistedSummaryAsync.when(
+                        data: (r) {
+                          if (r.summary.trim().isEmpty) {
+                            return const SizedBox.shrink();
+                          }
                           return Card(
                             margin: EdgeInsets.zero,
+                            elevation: _simplifiedUi ? 1.5 : 0.5,
                             color: theme.colorScheme.surfaceContainerHigh,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                              side: BorderSide(
+                                color: theme.colorScheme.primary
+                                    .withValues(alpha: 0.35),
+                              ),
+                            ),
                             child: Padding(
-                              padding: const EdgeInsets.all(16),
+                              padding: EdgeInsets.all(_simplifiedUi ? 18 : 16),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Résumé rapide',
-                                    style: theme.textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
+                                  Row(
                                     children: [
-                                      _MetaChip(
-                                        icon: Icons.groups_2_outlined,
-                                        label:
-                                            'Public: ${post.targetAudience ?? 'all'}',
+                                      Icon(
+                                        Icons.psychology_outlined,
+                                        color: theme.colorScheme.primary,
                                       ),
-                                      _MetaChip(
-                                        icon: Icons.category_outlined,
-                                        label:
-                                            'Nature: ${post.postNature ?? 'information'}',
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Résumé assisté',
+                                          style: sectionTitleStyle?.copyWith(
+                                            color: theme.colorScheme.primary,
+                                          ),
+                                        ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: 10),
                                   Text(
-                                    flash.summary,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      height: 1.4,
-                                    ),
+                                    r.summary,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: (_simplifiedUi
+                                            ? theme.textTheme.bodyLarge
+                                            : theme.textTheme.bodyMedium)
+                                        ?.copyWith(height: 1.35),
+                                  ),
+                                  ExpansionTile(
+                                    tilePadding: EdgeInsets.zero,
+                                    childrenPadding: EdgeInsets.zero,
+                                    title: const Text('Voir plus'),
+                                    children: [
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(bottom: 10),
+                                          child: Text(
+                                            r.summary,
+                                            style: (_simplifiedUi
+                                                    ? theme.textTheme.bodyLarge
+                                                    : theme.textTheme.bodyMedium)
+                                                ?.copyWith(height: 1.45),
+                                          ),
+                                        ),
+                                      ),
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: OutlinedButton.icon(
+                                          onPressed: !_isTtsSpeaking
+                                              ? () => _speakDescription(r.summary)
+                                              : null,
+                                          icon: const Icon(Icons.volume_up_outlined),
+                                          label: const Text('Écouter ce résumé'),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
                             ),
                           );
                         },
-                        loading: () => const SizedBox.shrink(),
+                        loading: () => Card(
+                          margin: EdgeInsets.zero,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              children: [
+                                const SizedBox(
+                                  width: 26,
+                                  height: 26,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'Préparation du résumé assisté…',
+                                    style: theme.textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                         error: (_, _) => const SizedBox.shrink(),
                       ),
                       const SizedBox(height: 16),
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Actions rapides',
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              SizedBox(
-                                width: double.infinity,
-                                child: FilledButton.icon(
-                                  onPressed: () {
-                                    final pre = ref
-                                        .read(postDetailAssistanceProvider)
-                                        .buildHelpRequestFromPost(post);
-                                    context.push('/create-help-request', extra: pre);
-                                  },
-                                  style: FilledButton.styleFrom(
-                                    minimumSize: const Size(double.infinity, 52),
-                                  ),
-                                  icon: const Icon(Icons.emergency_share_outlined),
-                                  label: const Text('Demander de l’aide'),
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              ref.watch(postMerciStateProvider(widget.postId)).when(
-                                    data: (merci) {
-                                      final isAuthor =
-                                          user != null && user.id == post.userId;
-                                      return Row(
-                                        children: [
-                                          Expanded(
-                                            child: OutlinedButton.icon(
-                                              onPressed: (_merciBusy ||
-                                                      user == null ||
-                                                      isAuthor)
-                                                  ? null
-                                                  : _toggleMerci,
-                                              icon: _merciBusy
-                                                  ? const SizedBox(
-                                                      width: 16,
-                                                      height: 16,
-                                                      child:
-                                                          CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                      ),
-                                                    )
-                                                  : const Icon(
-                                                      Icons.volunteer_activism_outlined,
-                                                    ),
-                                              label: Text(
-                                                'Moi aussi concerné (${merci.merciCount})',
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                    loading: () => const SizedBox.shrink(),
-                                    error: (_, __) => const SizedBox.shrink(),
-                                  ),
-                              if (post.showsObstacleValidation) ...[
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: (_obstacleBusy || user == null)
-                                            ? null
-                                            : () => _voteObstacle(true),
-                                        icon: const Icon(Icons.check_circle_outline),
-                                        label: const Text('Toujours là'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: (_obstacleBusy || user == null)
-                                            ? null
-                                            : () => _voteObstacle(false),
-                                        icon: const Icon(Icons.cancel_outlined),
-                                        label: const Text('Plus là'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ],
+                      if (canDeletePost) ...[
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            onPressed: _deletePostBusy ? null : _confirmDeletePost,
+                            icon: _deletePostBusy
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.delete_outline),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error,
+                            ),
+                            label: const Text('Supprimer ce post'),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      _PostAssistSection(post: post),
-                      const SizedBox(height: 24),
+                        const SizedBox(height: 16),
+                      ],
+                      // Commentaires directement après le post.
                       // Commentaires
                       Text(
                         strings.comments,
@@ -541,16 +1073,99 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                               ),
                             );
                           }
-                          return Card(
-                            margin: EdgeInsets.zero,
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                children: comments.map((comment) {
-                                  return _CommentCard(comment: comment);
-                                }).toList(),
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  Semantics(
+                                    button: true,
+                                    label: 'Lire les commentaires un par un',
+                                    child: FilledButton.tonalIcon(
+                                      onPressed: !_isTtsSpeaking
+                                          ? () => _readCommentAtIndex(comments, 0)
+                                          : null,
+                                      icon: const Icon(Icons.record_voice_over_outlined),
+                                      label: const Text('Lire les commentaires'),
+                                    ),
+                                  ),
+                                  Semantics(
+                                    button: true,
+                                    label: 'Lire tout les commentaires',
+                                    child: OutlinedButton.icon(
+                                      onPressed: !_isTtsSpeaking
+                                          ? () => _readAllComments(comments)
+                                          : null,
+                                      icon: const Icon(Icons.forum_outlined),
+                                      label: const Text('Lire tout'),
+                                    ),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (!_isTtsSpeaking && _ttsCommentsContext.isNotEmpty)
+                                        ? _readPreviousComment
+                                        : null,
+                                    icon: const Icon(Icons.skip_previous),
+                                    label: const Text('Précédent'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (!_isTtsSpeaking && _ttsCommentsContext.isNotEmpty)
+                                        ? _readNextComment
+                                        : null,
+                                    icon: const Icon(Icons.skip_next),
+                                    label: const Text('Suivant'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (!_isTtsSpeaking &&
+                                            _ttsCommentsContext.isNotEmpty &&
+                                            _ttsCommentIndex >= 0)
+                                        ? _replayCurrentComment
+                                        : null,
+                                    icon: const Icon(Icons.replay),
+                                    label: const Text('Replay'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (_isTtsSpeaking && !_ttsPaused)
+                                        ? _pauseTts
+                                        : null,
+                                    icon: const Icon(Icons.pause),
+                                    label: const Text('Pause'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (_isTtsSpeaking || _ttsPaused)
+                                        ? _stopTts
+                                        : null,
+                                    icon: const Icon(Icons.stop_circle_outlined),
+                                    label: const Text('Stop'),
+                                  ),
+                                ],
                               ),
-                            ),
+                              const SizedBox(height: 10),
+                              Card(
+                                margin: EdgeInsets.zero,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    children: comments.map((comment) {
+                                      return _CommentCard(
+                                        comment: comment,
+                                        canDelete: _canDeleteComment(
+                                          post: post,
+                                          comment: comment,
+                                          user: user,
+                                        ),
+                                        deleting: _deletingCommentId == comment.id,
+                                        onDelete: () => _confirmDeleteComment(
+                                          post: post,
+                                          comment: comment,
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ),
+                              ),
+                            ],
                           );
                         },
                         loading: () => const Center(
@@ -582,46 +1197,72 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   child: Semantics(
                     container: true,
                     label: 'Saisie de commentaire',
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _commentController,
-                            decoration: InputDecoration(
-                              hintText: strings.writeComment,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              filled: true,
-                              fillColor: theme.colorScheme.surfaceContainerLow,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 12,
-                              ),
+                        TextField(
+                          controller: _commentController,
+                          decoration: InputDecoration(
+                            hintText: strings.writeComment,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            minLines: 1,
-                            maxLines: 4,
-                            textInputAction: TextInputAction.send,
-                            onSubmitted: (_) => _submitComment(),
+                            filled: true,
+                            fillColor: theme.colorScheme.surfaceContainerLow,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
                           ),
+                          minLines: 1,
+                          maxLines: 4,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _submitComment(),
                         ),
-                        const SizedBox(width: 8),
-                        FilledButton(
-                          onPressed: _isSubmittingComment ? null : _submitComment,
-                          style: FilledButton.styleFrom(
-                            minimumSize: const Size(52, 52),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.end,
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _toggleCommentVoiceInput,
+                              icon: Icon(
+                                _isCommentListening ? Icons.stop : Icons.mic,
+                              ),
+                              label: Text(
+                                _isCommentListening
+                                    ? 'Arrêter la voix'
+                                    : 'Commenter avec la voix',
+                              ),
                             ),
-                          ),
-                          child: _isSubmittingComment
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Icon(Icons.send),
+                            FilledButton.tonalIcon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _retryCommentVoiceInput,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Réessayer'),
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _cancelCommentVoiceInput,
+                              icon: const Icon(Icons.close),
+                              label: const Text('Annuler'),
+                            ),
+                            FilledButton.icon(
+                              onPressed: _isSubmittingComment ? null : _submitComment,
+                              icon: _isSubmittingComment
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child:
+                                          CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.send),
+                              label: const Text('Publier'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -659,83 +1300,6 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Résumés accessibles + lien vers demande d’aide (couche [PostDetailAssistanceService]).
-class _PostAssistSection extends ConsumerWidget {
-  const _PostAssistSection({required this.post});
-
-  final PostModel post;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final postSummary =
-        ref.watch(postDetailAssistancePostSummaryProvider(post.id));
-    final commentsSummary =
-        ref.watch(postDetailAssistanceCommentsSummaryProvider(post.id));
-
-    return Card(
-      margin: EdgeInsets.zero,
-      color: theme.colorScheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Aperçu accessible',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _AccessibleField(
-              label: 'Type',
-              value: post.type.displayName,
-            ),
-            _AccessibleField(
-              label: 'Nature',
-              value: post.postNature ?? 'information',
-            ),
-            const SizedBox(height: 8),
-            postSummary.when(
-              data: (r) => _AccessibleField(
-                label: 'Aperçu',
-                value: r.summary,
-              ),
-              loading: () => const LinearProgressIndicator(minHeight: 2),
-              error: (_, __) => _AccessibleField(
-                label: 'Aperçu',
-                value: 'Résumé indisponible.',
-              ),
-            ),
-            const SizedBox(height: 8),
-            commentsSummary.when(
-              data: (r) => _AccessibleField(
-                label: 'Commentaires (aperçu)',
-                value: r.summary,
-              ),
-              loading: () => const SizedBox(
-                height: 4,
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
-              error: (_, __) => _AccessibleField(
-                label: 'Commentaires (aperçu)',
-                value: 'Aperçu commentaires indisponible.',
-              ),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: null,
-              icon: const Icon(Icons.volume_up_outlined),
-              label: const Text('Lecture audio (bientôt)'),
-            ),
-          ],
         ),
       ),
     );
@@ -882,9 +1446,17 @@ class _PostHeader extends StatelessWidget {
 }
 
 class _CommentCard extends StatelessWidget {
-  const _CommentCard({required this.comment});
+  const _CommentCard({
+    required this.comment,
+    required this.canDelete,
+    required this.deleting,
+    required this.onDelete,
+  });
 
   final CommentModel comment;
+  final bool canDelete;
+  final bool deleting;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -931,6 +1503,18 @@ class _CommentCard extends StatelessWidget {
                       VerifiedHelperBadge(
                         trustPoints: comment.user?.trustPoints ?? 0,
                       ),
+                      if (canDelete)
+                        IconButton(
+                          tooltip: 'Supprimer le commentaire',
+                          onPressed: deleting ? null : onDelete,
+                          icon: deleting
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.delete_outline),
+                        ),
                     ],
                   ),
                   if (comment.createdAt != null)
@@ -1012,35 +1596,4 @@ class _MetaChip extends StatelessWidget {
   }
 }
 
-class _AccessibleField extends StatelessWidget {
-  const _AccessibleField({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: theme.textTheme.labelLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: theme.textTheme.bodyMedium?.copyWith(height: 1.35),
-          ),
-        ],
-      ),
-    );
-  }
-}
 

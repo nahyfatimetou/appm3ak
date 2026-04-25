@@ -249,14 +249,20 @@ class _CreateHelpRequestScreenState extends ConsumerState<CreateHelpRequestScree
         );
         return;
       }
-      if (await _maybeNavigateToRecommendedRoute(plan, presetText)) {
-        return;
-      }
+      final nav = await _maybeNavigateToRecommendedRoute(plan, presetText);
+      if (nav.navigatedAway) return;
 
       await _applyAiPlanToForm(plan);
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Suggestion analysée automatiquement')),
+        SnackBar(
+          content: Text(
+            nav.alreadyOnTarget
+                ? 'Parcours IA : vous êtes déjà sur l’écran demande d’aide. Champs mis à jour.'
+                : 'Suggestion analysée automatiquement',
+          ),
+        ),
       );
     } catch (_) {
       if (!mounted) return;
@@ -344,14 +350,20 @@ class _CreateHelpRequestScreenState extends ConsumerState<CreateHelpRequestScree
         );
         return;
       }
-      if (await _maybeNavigateToRecommendedRoute(plan, text)) {
-        return;
-      }
+      final nav = await _maybeNavigateToRecommendedRoute(plan, text);
+      if (nav.navigatedAway) return;
 
       await _applyAiPlanToForm(plan);
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Le formulaire a été prérempli automatiquement.')),
+        SnackBar(
+          content: Text(
+            nav.alreadyOnTarget
+                ? 'Parcours IA : vous êtes déjà sur l’écran demande d’aide. Champs mis à jour.'
+                : 'Le formulaire a été prérempli automatiquement.',
+          ),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -417,23 +429,40 @@ class _CreateHelpRequestScreenState extends ConsumerState<CreateHelpRequestScree
     });
   }
 
-  Future<bool> _maybeNavigateToRecommendedRoute(
+  Future<({bool navigatedAway, bool alreadyOnTarget})>
+      _maybeNavigateToRecommendedRoute(
     CommunityActionPlanResult plan,
     String currentText,
   ) async {
-    if (!mounted) return false;
+    if (!mounted) {
+      return (navigatedAway: false, alreadyOnTarget: false);
+    }
     debugPrint(
       '[CommunityAI][help] action=${plan.action} route=${plan.recommendedRoute} '
-      'reason=${plan.routeReason} confidence=${plan.confidence}',
+      'reason=${plan.routeReason} confidence=${plan.confidence} '
+      'path=${GoRouterState.of(context).uri.path}',
     );
 
-    if (_aiRouteRedirectConsumed) return false;
-    final route = plan.recommendedRoute;
+    if (_aiRouteRedirectConsumed) {
+      return (navigatedAway: false, alreadyOnTarget: false);
+    }
+    final route = plan.recommendedRoute?.trim();
     final currentPath = GoRouterState.of(context).uri.path;
-    if (plan.shouldAutoNavigate(minConfidence: 0.85) &&
-        route != null &&
-        route.isNotEmpty &&
-        route != currentPath) {
+    if (route == null || route.isEmpty) {
+      return (navigatedAway: false, alreadyOnTarget: false);
+    }
+
+    final onSameScreen =
+        communityActionRecommendedRouteMatchesLocation(route, currentPath);
+
+    if (plan.shouldAutoNavigate(minConfidence: 0.85) && onSameScreen) {
+      debugPrint(
+        '[CommunityAI][help] recommended route matches current screen — no push',
+      );
+      return (navigatedAway: false, alreadyOnTarget: true);
+    }
+
+    if (plan.shouldAutoNavigate(minConfidence: 0.85) && !onSameScreen) {
       _aiRouteRedirectConsumed = true;
       final uri = Uri.parse(route);
       final merged = Map<String, String>.from(uri.queryParameters)
@@ -441,13 +470,11 @@ class _CreateHelpRequestScreenState extends ConsumerState<CreateHelpRequestScree
         ..putIfAbsent('aiSeed', () => currentText);
       await context.push(
         uri.replace(queryParameters: merged).toString(),
+        extra: plan,
       );
-      return true;
+      return (navigatedAway: true, alreadyOnTarget: false);
     }
-    if (route != null &&
-        route.isNotEmpty &&
-        route != currentPath &&
-        !plan.shouldAutoNavigate(minConfidence: 0.85)) {
+    if (!onSameScreen && !plan.shouldAutoNavigate(minConfidence: 0.85)) {
       final reason = plan.routeReason?.trim();
       final msg = (reason != null && reason.isNotEmpty)
           ? 'Suggestion: $reason'
@@ -456,7 +483,7 @@ class _CreateHelpRequestScreenState extends ConsumerState<CreateHelpRequestScree
         SnackBar(content: Text(msg)),
       );
     }
-    return false;
+    return (navigatedAway: false, alreadyOnTarget: false);
   }
 
   Future<void> _submit() async {

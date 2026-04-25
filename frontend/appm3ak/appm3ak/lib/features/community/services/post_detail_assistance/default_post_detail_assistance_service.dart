@@ -1,5 +1,6 @@
 import '../../../../core/config/app_config.dart';
 import '../../../../data/models/comment_model.dart';
+import '../../../../data/models/flash_summary_model.dart';
 import '../../../../data/models/post_model.dart';
 import 'local_post_detail_assistance_service.dart';
 import 'post_detail_assistance_models.dart';
@@ -51,5 +52,15 @@ class DefaultPostDetailAssistanceService implements PostDetailAssistanceService 
   @override
   String buildTtsReadablePost(PostModel post) {
     return _local.buildTtsReadablePost(post);
+  }
+
+  @override
+  String buildTtsReadableFlashSummary(PostModel post, FlashSummaryModel flash) {
+    return _local.buildTtsReadableFlashSummary(post, flash);
+  }
+
+  @override
+  String buildTtsReadableComments(PostModel post, List<CommentModel> comments) {
+    return _local.buildTtsReadableComments(post, comments);
   }
 }

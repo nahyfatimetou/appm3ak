@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -16,6 +18,7 @@ import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
 import '../../accessibility/accessibility_post_handoff.dart';
 import '../../accessibility/accessibility_post_prefs.dart';
+import '../logic/information_head_gesture_intent.dart';
 import '../logic/post_create_legacy_type.dart';
 import '../logic/post_create_preset_config.dart';
 
@@ -26,6 +29,7 @@ class CreatePostScreen extends ConsumerStatefulWidget {
     this.initialContent,
     this.autoOpenCamera = false,
     this.autoPublishAfterCamera = false,
+    this.accessibilityAnnounceGalleryVolumeOrCameraFallback = false,
     this.prefilledImages,
     this.initialPostType,
     this.initialAccessibilityHandoff,
@@ -35,6 +39,9 @@ class CreatePostScreen extends ConsumerStatefulWidget {
   final String? initialContent;
   final bool autoOpenCamera;
   final bool autoPublishAfterCamera;
+
+  /// Android : synthèse vocale « galerie », Volume+ = galerie ; sinon délai → caméra.
+  final bool accessibilityAnnounceGalleryVolumeOrCameraFallback;
   final List<XFile>? prefilledImages;
   final PostType? initialPostType;
   final AccessibilityPostHandoff? initialAccessibilityHandoff;
@@ -68,6 +75,7 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
   bool _isAiLoading = false;
   bool _isAnalyzingAI = false;
   bool _aiRouteRedirectConsumed = false;
+  bool _redirectToPostsAfterSubmit = false;
   final List<XFile> _images = [];
   bool _loadingLocation = false;
   double? _latitude;
@@ -75,6 +83,11 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
 
   static const int _maxImages = 10;
   Future<bool> Function()? _previousVolumeUpPriority;
+
+  /// Accessibilité : choix galerie (Volume+) ou caméra (délai).
+  bool _accessibilityImageChoiceActive = false;
+  Timer? _cameraFallbackTimer;
+  final FlutterTts _accessibilityTts = FlutterTts();
 
   static const List<String> _natureKeys = [
     'signalement',
@@ -134,7 +147,16 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
       }
     }
 
-    if (widget.autoOpenCamera) {
+    if (widget.accessibilityAnnounceGalleryVolumeOrCameraFallback && !kIsWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (Platform.isAndroid) {
+          unawaited(_startAccessibilityGalleryVolumeOrCamera());
+        } else {
+          unawaited(_accessibilitySpeakThenOpenCameraOnly());
+        }
+      });
+    } else if (widget.autoOpenCamera) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         await _pickFromCamera();
@@ -215,8 +237,14 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
 
   @override
   void dispose() {
-    if (!kIsWeb && AndroidVolumeHub.onVolumeUpPriority == _onVolumeUpPublish) {
-      AndroidVolumeHub.onVolumeUpPriority = _previousVolumeUpPriority;
+    _resetAccessibilityImageChoiceTimer();
+    unawaited(_accessibilityTts.stop());
+    if (!kIsWeb && Platform.isAndroid) {
+      final p = AndroidVolumeHub.onVolumeUpPriority;
+      if (identical(p, _onVolumeUpPublish) ||
+          identical(p, _onVolumeUpOpenGalleryShortcut)) {
+        AndroidVolumeHub.onVolumeUpPriority = _previousVolumeUpPriority;
+      }
     }
     _contenuController.dispose();
     super.dispose();
@@ -226,6 +254,74 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     if (!mounted) return false;
     await _submitPost();
     return true;
+  }
+
+  /// Pendant le choix image accessibilité : Volume+ ouvre la galerie.
+  Future<bool> _onVolumeUpOpenGalleryShortcut() async {
+    if (!mounted || !_accessibilityImageChoiceActive) return false;
+    _resetAccessibilityImageChoiceTimer();
+    _accessibilityImageChoiceActive = false;
+    if (!kIsWeb && Platform.isAndroid) {
+      AndroidVolumeHub.onVolumeUpPriority = _onVolumeUpPublish;
+    }
+    await _pickFromGallery();
+    return true;
+  }
+
+  void _resetAccessibilityImageChoiceTimer() {
+    _cameraFallbackTimer?.cancel();
+    _cameraFallbackTimer = null;
+  }
+
+  Future<void> _startAccessibilityGalleryVolumeOrCamera() async {
+    if (!mounted) return;
+    _accessibilityImageChoiceActive = true;
+    AndroidVolumeHub.ensureInitialized();
+    AndroidVolumeHub.onVolumeUpPriority = _onVolumeUpOpenGalleryShortcut;
+
+    final user = ref.read(authStateProvider).valueOrNull;
+    final lang = user?.preferredLanguage?.name.toLowerCase() ?? '';
+    final ttsLang = lang == 'ar' ? 'ar-SA' : 'fr-FR';
+    try {
+      await _accessibilityTts.setLanguage(ttsLang);
+      await _accessibilityTts.setSpeechRate(0.45);
+      await _accessibilityTts.speak(
+        lang == 'ar'
+            ? 'المعرض. اضغط على زر رفع الصوت لفتح المعرض. في غياب ذلك، تُفتح الكاميرا.'
+            : 'Galerie. Appuyez sur volume plus pour ouvrir la galerie. '
+                'Sans action, l’appareil photo s’ouvrira.',
+      );
+    } catch (_) {}
+
+    _cameraFallbackTimer = Timer(const Duration(seconds: 12), () async {
+      if (!mounted || !_accessibilityImageChoiceActive) return;
+      _resetAccessibilityImageChoiceTimer();
+      _accessibilityImageChoiceActive = false;
+      if (!kIsWeb && Platform.isAndroid) {
+        AndroidVolumeHub.onVolumeUpPriority = _onVolumeUpPublish;
+      }
+      await _pickFromCamera();
+    });
+  }
+
+  /// iOS / desktop : pas de Volume+ global — annonce puis caméra après délai.
+  Future<void> _accessibilitySpeakThenOpenCameraOnly() async {
+    final user = ref.read(authStateProvider).valueOrNull;
+    final lang = user?.preferredLanguage?.name.toLowerCase() ?? '';
+    final ttsLang = lang == 'ar' ? 'ar-SA' : 'fr-FR';
+    try {
+      await _accessibilityTts.setLanguage(ttsLang);
+      await _accessibilityTts.setSpeechRate(0.45);
+      await _accessibilityTts.speak(
+        lang == 'ar'
+            ? 'استخدم الأزرار لاختيار المعرض أو الكاميرا.'
+            : 'Utilisez les boutons Galerie ou Appareil photo. '
+                'La caméra s’ouvre dans quelques secondes si besoin.',
+      );
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(seconds: 12));
+    if (!mounted) return;
+    await _pickFromCamera();
   }
 
   double? _roundApprox(double? v) {
@@ -310,7 +406,11 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
             backgroundColor: Colors.green,
           ),
         );
-        context.pop();
+        if (_redirectToPostsAfterSubmit) {
+          context.go('/community-posts');
+        } else {
+          context.pop();
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -340,6 +440,11 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
       return;
     }
 
+    if (isInformationAccessibleInfoHeadGesturePhrase(text)) {
+      await context.push('/create-post-head-gesture');
+      return;
+    }
+
     setState(() {
       _isAiLoading = true;
       _aiRouteRedirectConsumed = false;
@@ -363,14 +468,20 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
         );
         return;
       }
-      if (await _maybeNavigateToRecommendedRoute(plan, text)) {
-        return;
-      }
+      final nav = await _maybeNavigateToRecommendedRoute(plan, text);
+      if (nav.navigatedAway) return;
 
       _applyAiPlanToForm(plan);
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Le formulaire a été prérempli automatiquement.')),
+        SnackBar(
+          content: Text(
+            nav.alreadyOnTarget
+                ? 'Parcours IA : vous êtes déjà sur l’écran publication. Champs mis à jour.'
+                : 'Le formulaire a été prérempli automatiquement.',
+          ),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -393,7 +504,7 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     if (kIsWeb) return;
     setState(() => _loadingLocation = true);
     try {
-      final pos = await getCurrentPositionOrNull();
+      final pos = await getCurrentPositionForPostOrNull();
       if (!mounted) return;
       if (pos == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -411,6 +522,14 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     } finally {
       if (mounted) setState(() => _loadingLocation = false);
     }
+  }
+
+  /// Une photo prise sur place doit envoyer les coordonnées GPS actuelles en **précis**
+  /// (pas une position antérieure ni le mode approximatif de l’IA).
+  Future<void> _ensurePreciseGpsAfterPhotoCapture() async {
+    if (kIsWeb) return;
+    setState(() => _locationMode = 'precise');
+    await _attachCurrentLocation();
   }
 
   Future<void> _pickFromGallery() async {
@@ -440,12 +559,14 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     setState(() {
       if (_images.length < _maxImages) _images.add(x);
     });
+    await _ensurePreciseGpsAfterPhotoCapture();
   }
 
   Future<void> _applyAccessibilityHandoff(AccessibilityPostHandoff? handoff) async {
     if (!mounted || handoff == null) return;
     final shouldPublish = handoff.autoPublish;
     setState(() {
+      _redirectToPostsAfterSubmit = shouldPublish;
       if (handoff.content.trim().isNotEmpty) {
         _contenuController.text = handoff.content.trim();
       }
@@ -457,6 +578,9 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
         _images.add(x);
       }
     });
+    if (!kIsWeb && handoff.images.isNotEmpty) {
+      await _ensurePreciseGpsAfterPhotoCapture();
+    }
     if (shouldPublish) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 200));
@@ -468,13 +592,13 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
 
   Future<void> _openHeadGesturePost() async {
     final handoff =
-        await context.push<AccessibilityPostHandoff?>('/create-post-head-gesture');
+        await context.push<AccessibilityPostHandoff?>('/create-post-head-gesture?returnHandoff=1');
     await _applyAccessibilityHandoff(handoff);
   }
 
   Future<void> _openVoiceVibrationPost() async {
     final handoff = await context
-        .push<AccessibilityPostHandoff?>('/create-post-voice-vibration');
+        .push<AccessibilityPostHandoff?>('/create-post-voice-vibration?returnHandoff=1');
     await _applyAccessibilityHandoff(handoff);
   }
 
@@ -554,6 +678,11 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     final text = _contenuController.text.trim();
     if (text.length < 2) return;
 
+    if (isInformationAccessibleInfoHeadGesturePhrase(text)) {
+      await context.push('/create-post-head-gesture');
+      return;
+    }
+
     setState(() {
       _isAnalyzingAI = true;
       _isAiLoading = true;
@@ -583,14 +712,20 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
         );
         return;
       }
-      if (await _maybeNavigateToRecommendedRoute(plan, text)) {
-        return;
-      }
+      final nav = await _maybeNavigateToRecommendedRoute(plan, text);
+      if (nav.navigatedAway) return;
 
       _applyAiPlanToForm(plan, keepPreset: m.id);
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Suggestion analysée automatiquement')),
+        SnackBar(
+          content: Text(
+            nav.alreadyOnTarget
+                ? 'Parcours IA : vous êtes déjà sur l’écran publication. Champs mis à jour.'
+                : 'Suggestion analysée automatiquement',
+          ),
+        ),
       );
     } catch (_) {
       if (!mounted) return;
@@ -638,23 +773,40 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     return parts.join('\n\n');
   }
 
-  Future<bool> _maybeNavigateToRecommendedRoute(
+  Future<({bool navigatedAway, bool alreadyOnTarget})>
+      _maybeNavigateToRecommendedRoute(
     CommunityActionPlanResult plan,
     String currentText,
   ) async {
-    if (!mounted) return false;
+    if (!mounted) {
+      return (navigatedAway: false, alreadyOnTarget: false);
+    }
     debugPrint(
       '[CommunityAI][post] action=${plan.action} route=${plan.recommendedRoute} '
-      'reason=${plan.routeReason} confidence=${plan.confidence}',
+      'reason=${plan.routeReason} confidence=${plan.confidence} '
+      'path=${GoRouterState.of(context).uri.path}',
     );
 
-    if (_aiRouteRedirectConsumed) return false;
-    final route = plan.recommendedRoute;
+    if (_aiRouteRedirectConsumed) {
+      return (navigatedAway: false, alreadyOnTarget: false);
+    }
+    final route = plan.recommendedRoute?.trim();
     final currentPath = GoRouterState.of(context).uri.path;
-    if (plan.shouldAutoNavigate(minConfidence: 0.85) &&
-        route != null &&
-        route.isNotEmpty &&
-        route != currentPath) {
+    if (route == null || route.isEmpty) {
+      return (navigatedAway: false, alreadyOnTarget: false);
+    }
+
+    final onSameScreen =
+        communityActionRecommendedRouteMatchesLocation(route, currentPath);
+
+    if (plan.shouldAutoNavigate(minConfidence: 0.85) && onSameScreen) {
+      debugPrint(
+        '[CommunityAI][post] recommended route matches current screen — no push',
+      );
+      return (navigatedAway: false, alreadyOnTarget: true);
+    }
+
+    if (plan.shouldAutoNavigate(minConfidence: 0.85) && !onSameScreen) {
       _aiRouteRedirectConsumed = true;
       final uri = Uri.parse(route);
       final merged = Map<String, String>.from(uri.queryParameters)
@@ -662,13 +814,11 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
         ..putIfAbsent('aiSeed', () => currentText);
       await context.push(
         uri.replace(queryParameters: merged).toString(),
+        extra: plan,
       );
-      return true;
+      return (navigatedAway: true, alreadyOnTarget: false);
     }
-    if (route != null &&
-        route.isNotEmpty &&
-        route != currentPath &&
-        !plan.shouldAutoNavigate(minConfidence: 0.85)) {
+    if (!onSameScreen && !plan.shouldAutoNavigate(minConfidence: 0.85)) {
       final reason = plan.routeReason?.trim();
       final msg = (reason != null && reason.isNotEmpty)
           ? 'Suggestion: $reason'
@@ -677,7 +827,7 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
         SnackBar(content: Text(msg)),
       );
     }
-    return false;
+    return (navigatedAway: false, alreadyOnTarget: false);
   }
 
   void _applyAiPlanToForm(
@@ -685,6 +835,7 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
     PostCreatePresetId? keepPreset,
   }) {
     final mapped = plan.toCreatePostInput();
+    var needsGpsRefreshAfterAi = false;
     setState(() {
       if ((mapped.contenu).trim().isNotEmpty) {
         _contenuController.text = mapped.contenu.trim();
@@ -710,8 +861,17 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
           _locationMode = loc;
         }
       }
+      // Avec une photo : une position sur le terrain attend des coordonnées précises.
+      if (_images.isNotEmpty &&
+          (_locationMode == 'approximate' || _locationMode == 'precise')) {
+        _locationMode = 'precise';
+        needsGpsRefreshAfterAi = true;
+      }
       _selectedPresetId = keepPreset;
     });
+    if (!kIsWeb && needsGpsRefreshAfterAi) {
+      unawaited(_attachCurrentLocation());
+    }
   }
 
   String _locationLabel(AppStrings s) {

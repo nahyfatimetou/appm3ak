@@ -32,11 +32,8 @@ import { CommunityActionPlanRequestDto } from './dto/community-action-plan-reque
 import { HelpRequest } from './schemas/help-request.schema';
 import { ValidatePostObstacleDto } from './dto/validate-post-obstacle.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserDocument } from '../user/schemas/user.schema';
-import { Role } from '../user/enums/role.enum';
 import { getUploadsRoot, UPLOADS_PUBLIC_PREFIX } from '../common/upload-paths';
 
 const postImageStorage = diskStorage({
@@ -183,15 +180,17 @@ export class CommunityController {
   }
 
   @Delete('posts/:postId')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Supprimer un post (spam / contenu inapproprié) — réservé administrateurs',
+      'Supprimer un post (auteur du post ou administrateur)',
   })
-  async deletePostAdmin(@Param('postId') postId: string) {
-    return this.communityService.deletePostAsAdmin(postId);
+  async deletePost(
+    @Param('postId') postId: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    return this.communityService.deletePost(postId, user._id.toString(), user.role);
   }
 
   @Get('posts')
@@ -245,6 +244,26 @@ export class CommunityController {
   @ApiOperation({ summary: 'Commentaires d\'un post' })
   async getComments(@Param('postId') postId: string) {
     return this.communityService.getComments(postId);
+  }
+
+  @Delete('posts/:postId/comments/:commentId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Supprimer un commentaire (auteur du commentaire, auteur du post, ou administrateur)',
+  })
+  async deleteComment(
+    @Param('postId') postId: string,
+    @Param('commentId') commentId: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    return this.communityService.deleteComment(
+      postId,
+      commentId,
+      user._id.toString(),
+      user.role,
+    );
   }
 
   @Get('posts/:postId/comments/flash-summary')

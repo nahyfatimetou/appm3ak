@@ -66,6 +66,7 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
 
   static const double _eyeClosedMax = 0.40;
   static const double _eyeOpenMin = 0.48;
+  bool _returnHandoffOnPublish = false;
 
   @override
   void initState() {
@@ -85,6 +86,11 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
     }
     _initTts();
     _init();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final q = GoRouterState.of(context).uri.queryParameters;
+      _returnHandoffOnPublish = q['returnHandoff'] == '1';
+    });
   }
 
   Future<void> _init() async {
@@ -592,14 +598,17 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
   void _finishWithHandoff() {
     final idx = _selectedIndex >= 0 ? _selectedIndex : 0;
     final text = kAccessibilityCannedPostPhrases[idx];
-    context.pop(
-      AccessibilityPostHandoff(
-        content: text,
-        images: List<XFile>.from(_shots),
-        suggestedPostType: PostType.handicapMoteur,
-        autoPublish: true,
-      ),
+    final handoff = AccessibilityPostHandoff(
+      content: text,
+      images: List<XFile>.from(_shots),
+      suggestedPostType: PostType.handicapMoteur,
+      autoPublish: !_returnHandoffOnPublish,
     );
+    if (_returnHandoffOnPublish) {
+      context.pop(handoff);
+      return;
+    }
+    context.pushReplacement('/create-post', extra: handoff);
   }
 
   @override

@@ -1,4 +1,5 @@
 import '../../../../data/models/comment_model.dart';
+import '../../../../data/models/flash_summary_model.dart';
 import '../../../../data/models/post_model.dart';
 import 'post_detail_assistance_models.dart';
 
@@ -21,4 +22,10 @@ abstract class PostDetailAssistanceService {
 
   /// Texte optimisé pour synthèse vocale (phrases courtes, intro auteur).
   String buildTtsReadablePost(PostModel post);
+
+  /// Texte vocal pour le résumé rapide (flash summary).
+  String buildTtsReadableFlashSummary(PostModel post, FlashSummaryModel flash);
+
+  /// Texte vocal pour la liste des commentaires (tronqué si très long).
+  String buildTtsReadableComments(PostModel post, List<CommentModel> comments);
 }
