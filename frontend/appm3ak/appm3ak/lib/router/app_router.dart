@@ -6,11 +6,23 @@ import '../core/l10n/app_strings.dart';
 import '../features/accompaniment/screens/emergency_contacts_screen.dart';
 import '../features/accompaniment/screens/transport_requests_screen.dart';
 import '../features/auth/screens/login_screen.dart';
+import '../features/community/screens/community_contacts_route_screen.dart';
+import '../features/community/screens/community_ai_entry_screen.dart';
 import '../features/community/screens/community_locations_screen.dart';
 import '../features/community/screens/community_main_screen.dart';
+import '../features/community/screens/community_nearby_places_screen.dart';
 import '../features/community/screens/create_help_request_screen.dart';
+import '../features/accessibility/accessibility_post_handoff.dart';
+import '../features/accessibility/head_gesture_post_screen.dart';
+import '../features/accessibility/vibration_coded_post_screen.dart';
+import '../features/accessibility/voice_vibration_post_screen.dart';
 import '../features/community/screens/create_post_screen.dart';
+import '../features/community/services/post_detail_assistance/post_detail_assistance_models.dart';
+import '../data/models/help_request_model.dart';
+import '../data/models/community_action_plan_result.dart';
+import '../features/community/screens/help_request_detail_screen.dart';
 import '../features/community/screens/help_requests_screen.dart';
+import '../features/community/screens/haptic_help_screen.dart';
 import '../features/community/screens/location_detail_screen.dart';
 import '../features/community/screens/post_detail_screen.dart';
 import '../features/community/screens/submit_location_screen.dart';
@@ -26,68 +38,130 @@ import '../features/m3ak/m3ak_inclusion_page.dart';
 import '../features/profile/screens/profile_screen.dart';
 import '../m3ak_assist/m3ak_nav_key.dart';
 import '../m3ak_assist/m3ak_create_post_launch.dart';
+import '../core/config/app_config.dart';
 import '../providers/auth_providers.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
+  // Force GoRouter to reevaluate redirects on auth changes.
+  final authRefresh = ValueNotifier<int>(0);
+  ref.onDispose(authRefresh.dispose);
+  ref.listen(authStateProvider, (_, _) {
+    authRefresh.value++;
+  });
+
+  final auth = ref.watch(authStateProvider);
+  final user = auth.valueOrNull;
+
   return GoRouter(
     navigatorKey: m3akRootNavigatorKey,
     initialLocation: '/',
+    refreshListenable: authRefresh,
+    redirect: (context, state) {
+      final loc = state.uri.path;
+
+      // Public routes
+      const publicPaths = <String>{'/', '/login', '/register'};
+      final isPublic = publicPaths.contains(loc);
+
+      // While auth is loading, stay on splash (or allow current if public).
+      if (auth.isLoading) {
+        return isPublic ? null : '/';
+      }
+
+      // Demo/Device mode: allow navigating without auth.
+      if (AppConfig.allowGuest) {
+        // Avoid staying stuck on splash/login when guest mode is enabled.
+        if (loc == '/' || loc == '/login' || loc == '/register') {
+          return '/home';
+        }
+        return null;
+      }
+
+      // Not logged in → block all private routes.
+      if (user == null) {
+        return isPublic ? null : '/login';
+      }
+
+      // Logged in → prevent going back to login/register.
+      if (loc == '/login' || loc == '/register' || loc == '/') {
+        return '/home';
+      }
+
+      return null;
+    },
     routes: [
       GoRoute(
         path: '/',
-        builder: (_, __) => const SplashScreen(),
+        builder: (_, _) => const SplashScreen(),
       ),
       GoRoute(
         path: '/login',
-        builder: (_, __) => const LoginScreen(),
+        builder: (_, _) => const LoginScreen(),
       ),
       GoRoute(
         path: '/register',
-        builder: (_, __) => const RegisterScreen(),
+        builder: (_, _) => const RegisterScreen(),
       ),
       GoRoute(
         path: '/sante',
-        redirect: (_, __) => '/home?tab=1',
+        redirect: (_, _) => '/home?tab=1',
       ),
       GoRoute(
         path: '/home',
-        builder: (c, state) => MainShell(
-          initialIndex: state.uri.queryParameters['tab'] != null
-              ? int.tryParse(state.uri.queryParameters['tab']!) ?? 0
-              : 0,
-        ),
+        builder: (c, state) {
+          final tab = int.tryParse(state.uri.queryParameters['tab'] ?? '') ?? 0;
+          final communityTab =
+              int.tryParse(state.uri.queryParameters['communityTab'] ?? '') ?? 0;
+          return MainShell(
+            initialIndex: tab.clamp(0, 4),
+            communityTabIndex: communityTab.clamp(0, 3),
+          );
+        },
       ),
       GoRoute(
         path: '/profile',
-        builder: (_, __) => const MainShell(initialIndex: 4),
+        builder: (_, _) => const MainShell(initialIndex: 4),
       ),
       GoRoute(
         path: '/profile-edit',
-        builder: (_, __) => const ProfileScreen(),
+        builder: (_, _) => const ProfileScreen(),
       ),
       GoRoute(
         path: '/accompagnants',
-        builder: (_, __) => const EmergencyContactsScreen(),
+        builder: (_, _) => const EmergencyContactsScreen(),
       ),
       GoRoute(
         path: '/beneficiaires',
-        builder: (_, __) => const TransportRequestsScreen(),
+        builder: (_, _) => const TransportRequestsScreen(),
       ),
       GoRoute(
         path: '/medical-record',
-        builder: (_, __) => const MedicalRecordScreen(),
+        builder: (_, _) => const MedicalRecordScreen(),
       ),
       GoRoute(
         path: '/activity-posture-detection',
-        builder: (_, __) => const ActivityPostureDetectionScreen(),
+        builder: (_, _) => const ActivityPostureDetectionScreen(),
       ),
       GoRoute(
         path: '/sos-alerts',
-        builder: (_, __) => const SosAlertsScreen(),
+        builder: (_, _) => const SosAlertsScreen(),
       ),
       GoRoute(
         path: '/community-locations',
-        builder: (_, __) => const CommunityLocationsScreen(),
+        builder: (_, _) => const CommunityLocationsScreen(),
+      ),
+      GoRoute(
+        path: '/community-nearby',
+        builder: (_, _) =>
+            const CommunityNearbyPlacesScreen(embedded: false),
+      ),
+      GoRoute(
+        path: '/community-contacts',
+        builder: (_, _) => const CommunityContactsRouteScreen(),
+      ),
+      GoRoute(
+        path: '/community-ai-entry',
+        builder: (_, _) => const CommunityAiEntryScreen(),
       ),
       GoRoute(
         path: '/location-detail/:id',
@@ -98,12 +172,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/submit-location',
-        builder: (_, __) => const SubmitLocationScreen(),
+        builder: (_, _) => const SubmitLocationScreen(),
       ),
       // Routes pour Posts
       GoRoute(
         path: '/community-posts',
-        builder: (_, __) => const CommunityMainScreen(initialTabIndex: 1),
+        builder: (_, _) => const CommunityMainScreen(initialTabIndex: 1),
       ),
       GoRoute(
         path: '/create-post',
@@ -114,31 +188,85 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               initialContent: extra.initialContent,
               autoOpenCamera: extra.autoOpenCamera,
               autoPublishAfterCamera: extra.autoPublishAfterCamera,
+              accessibilityAnnounceGalleryVolumeOrCameraFallback:
+                  extra.accessibilityAnnounceGalleryVolumeOrCameraFallback,
             );
+          }
+          if (extra is AccessibilityPostHandoff) {
+            return CreatePostScreen(initialAccessibilityHandoff: extra);
+          }
+          if (extra is CommunityActionPlanResult) {
+            return CreatePostScreen(initialAiPlan: extra);
           }
           final initial = extra is String ? extra : null;
           return CreatePostScreen(initialContent: initial);
         },
       ),
       GoRoute(
+        path: '/create-post-head-gesture',
+        builder: (_, _) => const HeadGesturePostScreen(),
+      ),
+      GoRoute(
+        path: '/create-post-vibration',
+        builder: (_, _) => const VibrationCodedPostScreen(),
+      ),
+      GoRoute(
+        path: '/create-post-voice-vibration',
+        builder: (_, _) => const VoiceVibrationPostScreen(),
+      ),
+      GoRoute(
         path: '/post-detail/:id',
         builder: (context, state) {
           final id = state.pathParameters['id'] ?? '';
-          return PostDetailScreen(postId: id);
+          final q = state.uri.queryParameters;
+          final autoReadPost = q['autoReadPost'] == '1';
+          final autoReadComments = q['autoReadComments'] == '1';
+          final autoReadSummary = q['autoReadSummary'] == '1';
+          return PostDetailScreen(
+            postId: id,
+            autoReadPost: autoReadPost,
+            autoReadComments: autoReadComments,
+            autoReadSummary: autoReadSummary,
+          );
         },
       ),
       // Routes pour Help Requests
       GoRoute(
         path: '/help-requests',
-        builder: (_, __) => const HelpRequestsScreen(),
+        builder: (_, _) => const HelpRequestsScreen(),
+      ),
+      GoRoute(
+        path: '/help-request-detail',
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is HelpRequestModel) {
+            return HelpRequestDetailScreen(request: extra);
+          }
+          return Scaffold(
+            appBar: AppBar(title: Text(AppStrings.fr().helpRequestDetailTitle)),
+            body: Center(child: Text(AppStrings.fr().errorGeneric)),
+          );
+        },
       ),
       GoRoute(
         path: '/create-help-request',
-        builder: (_, __) => const CreateHelpRequestScreen(),
+        builder: (_, state) {
+          final extra = state.extra;
+          return CreateHelpRequestScreen(
+            initialPrefill:
+                extra is HelpRequestFromPostPrefill ? extra : null,
+            initialAiPlan:
+                extra is CommunityActionPlanResult ? extra : null,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/haptic-help',
+        builder: (_, _) => const HapticHelpScreen(),
       ),
       GoRoute(
         path: '/m3ak-inclusion',
-        builder: (_, __) => const M3akInclusionPage(),
+        builder: (_, _) => const M3akInclusionPage(),
       ),
       GoRoute(
         path: '/health-chat',
@@ -177,7 +305,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 loading: () => const Scaffold(
                   body: Center(child: CircularProgressIndicator()),
                 ),
-                error: (_, __) => Scaffold(
+                error: (_, _) => Scaffold(
                   body: Center(child: Text(AppStrings.fr().errorGeneric)),
                 ),
               );

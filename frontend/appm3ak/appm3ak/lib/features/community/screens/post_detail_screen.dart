@@ -1,26 +1,39 @@
-import 'package:dio/dio.dart';
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../../core/enums/type_handicap.dart';
 import '../../../core/l10n/app_strings.dart';
+import '../../accessibility/accessibility_post_prefs.dart';
 import '../../../data/models/comment_model.dart';
-import '../../../data/models/image_vision_description_model.dart';
 import '../../../data/models/post_model.dart';
-import '../../../data/models/simplified_text_model.dart';
 import '../../../data/repositories/community_repository.dart';
 import '../../../providers/auth_providers.dart';
 import '../../../providers/community_providers.dart';
+import '../../../providers/post_detail_assistance_provider.dart';
 import '../../../widgets/verified_helper_badge.dart';
+import '../logic/post_detail_danger_hint.dart';
 
 /// Écran de détails d'un post avec commentaires.
 class PostDetailScreen extends ConsumerStatefulWidget {
-  const PostDetailScreen({required this.postId, super.key});
+  const PostDetailScreen({
+    required this.postId,
+    this.autoReadPost = false,
+    this.autoReadComments = false,
+    this.autoReadSummary = false,
+    super.key,
+  });
 
   final String postId;
+  final bool autoReadPost;
+  final bool autoReadComments;
+  final bool autoReadSummary;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -29,191 +42,69 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _commentController = TextEditingController();
   final FlutterTts _flutterTts = FlutterTts();
+  final stt.SpeechToText _commentSpeech = stt.SpeechToText();
   bool _isSubmittingComment = false;
-  bool _isSimplifyingText = false;
-  bool _prefetchStarted = false;
-  String? _lastSpokenSimplifiedKey;
-  String? _lastSpokenPostKey;
-
-  String _cleanSimplifiedText(String text) {
-    // Objectif: garder uniquement le contenu "humain".
-    // Suppression:
-    // - introductions (ex: "Voici une/un résumé du texte...")
-    // - "Points clés"
-    // - instructions techniques (ex: "En 2 phrases de 5 mots maximum")
-    // - guillemets inutiles et balisage technique.
-    if (text.trim().isEmpty) return '';
-
-    var out = text.trim();
-
-    // Supprimer les code fences markdown (```json ... ```).
-    out = out.replaceAll(RegExp(r'```[\s\S]*?```'), '');
-    out = out.replaceAll('```json', '');
-    out = out.replaceAll('```JSON', '');
-    out = out.replaceAll('```', '');
-
-    // Supprimer introductions / consignes.
-    out = out.replaceAll(
-      RegExp(
-        r'\bVoici\s+(un|une)\s+résum(?:é|ée)\b[^:]*:?\s*',
-        caseSensitive: false,
-        dotAll: true,
-      ),
-      '',
-    );
-    out = out.replaceAll(
-      RegExp(
-        r'\bEn\s+\d+\s+phrases?\s+de\s+\d+\s+mots?\s+maximum\b.*$',
-        caseSensitive: false,
-        multiLine: true,
-        dotAll: true,
-      ),
-      '',
-    );
-    out = out.replaceAll(
-      RegExp(
-        r'\bPoints\s+clés\b.*$',
-        multiLine: true,
-        dotAll: true,
-      ),
-      '',
-    );
-
-    // Nettoyage markdown / puces / titres.
-    out = out.replaceAll(RegExp(r'^\s*•\s*', multiLine: true), '');
-    out = out.replaceAll(RegExp(r'^\s*#+\s*', multiLine: true), '');
-
-    // Extraire prioritairement les phrases entre guillemets.
-    final quoted = <String>[];
-    for (final m in RegExp(r'["“](.+?)["”]').allMatches(out)) {
-      final s = m.group(1)?.trim() ?? '';
-      if (s.isNotEmpty) quoted.add(s);
-    }
-    if (quoted.isNotEmpty) {
-      return quoted.join('\n').trim();
-    }
-
-    // Sinon: lignes propres (et suppression des guillemets restants).
-    out = out.replaceAll('"', '');
-    out = out.replaceAll('“', '');
-    out = out.replaceAll('”', '');
-    out = out.replaceAll('`', '');
-
-    return out
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .join('\n')
-        .trim();
-  }
-
-  List<String> _extractSimplifiedItems(SimplifiedTextModel simplified) {
-    if (simplified.keyPoints.isNotEmpty) {
-      // Le backend peut renvoyer des keyPoints pollués (introductions / consignes).
-      // On nettoie chaque entrée et on découpe en lignes.
-      final out = <String>[];
-      for (final kp in simplified.keyPoints) {
-        final cleaned = _cleanSimplifiedText(kp);
-        if (cleaned.isEmpty) continue;
-        for (final line in cleaned
-            .split('\n')
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)) {
-          out.add(line);
-        }
-      }
-      return out.toList(growable: false);
-    }
-
-    final cleaned = _cleanSimplifiedText(simplified.simplifiedText);
-    if (cleaned.isEmpty) return const [];
-
-    return cleaned
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList(growable: false);
-  }
-
-  String _annotateSimplifiedSentence(String s) {
-    var t = s.trim();
-    if (t.isEmpty) return t;
-
-    // Choisir emoji selon la présence de mots "danger".
-    final lower = t.toLowerCase();
-    const dangerWords = <String>[
-      'danger',
-      'dangereux',
-      'risque',
-      'grave',
-      'évitez',
-      'evitez',
-      'urgence',
-      'malaise',
-      'douleur',
-      'maladie',
-    ];
-    final isDanger = dangerWords.any(lower.contains);
-    final emoji = isDanger ? '🚫' : '🚸';
-
-    // Enlever guillemets restants (si le backend en met encore).
-    t = t
-        .replaceAll(RegExp(r'^[\"“”]+'), '')
-        .replaceAll(RegExp(r'[\"“”]+$'), '')
-        .trim();
-    return '$emoji $t';
-  }
-
-  String _formatSimplifiedForUi(SimplifiedTextModel simplified) {
-    final items = _extractSimplifiedItems(simplified);
-    if (items.isEmpty) return '';
-
-    // Résumé direct: max 6 phrases.
-    return items
-        .take(6)
-        .map(_annotateSimplifiedSentence)
-        .join('\n')
-        .trim();
-  }
-
-  String _formatSimplifiedForSpeech(SimplifiedTextModel simplified) {
-    final items = _extractSimplifiedItems(simplified);
-    if (items.isEmpty) return '';
-    return items.take(6).join('\n').trim();
-  }
-
-  String _cleanImageDescriptionText(String text) {
-    var out = text.trim();
-    if (out.isEmpty) return out;
-
-    // Certains backends peuvent renvoyer une string qui ressemble à du JSON
-    // encodé dans `description` (ex: "description_audio":"...").
-    // On extrait la valeur de `description` en priorité, sinon `description_audio`.
-    final visionMatch = RegExp(
-      r'"description"\s*:\s*"((?:\\.|[^"\\])*)"',
-      dotAll: true,
-    ).firstMatch(out);
-    final audioMatch = RegExp(
-      r'"description_audio"\s*:\s*"((?:\\.|[^"\\])*)"',
-      dotAll: true,
-    ).firstMatch(out);
-
-    final extracted = visionMatch?.group(1) ?? audioMatch?.group(1);
-    if (extracted != null && extracted.isNotEmpty) {
-      // Dé-échappement basique.
-      return extracted
-          .replaceAll(r'\"', '"')
-          .replaceAll(r'\n', '\n')
-          .replaceAll(r'\\', '\\');
-    }
-
-    return out;
-  }
+  bool _speechReady = false;
+  bool _isCommentListening = false;
+  String _commentLocaleId = 'fr_FR';
+  List<CommentModel> _ttsCommentsContext = const [];
+  int _ttsCommentIndex = -1;
+  bool _deletePostBusy = false;
+  String? _deletingCommentId;
+  /// Évite une double lecture auto si le widget rebuild avant la fin du TTS.
+  String? _lastAutoSpeakDedupKey;
+  /// Une seule planification auto par chargement de post (évite les callbacks empilés).
+  String? _autoSpeakScheduledPostId;
+  bool _isTtsSpeaking = false;
+  bool _autoReadPrefLoaded = false;
+  bool _autoReadSwitchOn = false;
+  /// 0 lent, 1 normal, 2 rapide — [AccessibilityPostPrefs.postDetailTtsRateIndex].
+  int _ttsRateIndex = 1;
+  bool _simplifiedUi = false;
+  bool _ttsPaused = false;
+  String? _ttsResumeText;
+  String? _autoActionDedupKey;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _initTts());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadPostDetailAccessibilityPrefs());
+  }
+
+  @override
+  void didUpdateWidget(PostDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.postId != widget.postId) {
+      _lastAutoSpeakDedupKey = null;
+      _autoSpeakScheduledPostId = null;
+      _autoActionDedupKey = null;
+    }
+  }
+
+  Future<void> _runRouteAutoActions(PostModel post) async {
+    final dedup =
+        '${post.id}|${widget.autoReadPost}|${widget.autoReadComments}|${widget.autoReadSummary}';
+    if (_autoActionDedupKey == dedup) return;
+    _autoActionDedupKey = dedup;
+    if (widget.autoReadPost) {
+      await _speakDescription(_ttsReadableForPost(post));
+    }
+    if (widget.autoReadComments) {
+      final comments = await ref.read(postCommentsProvider(widget.postId).future);
+      if (comments.isNotEmpty) {
+        await _readAllComments(comments);
+      }
+    }
+    if (widget.autoReadSummary) {
+      final r = await ref.read(
+        postDetailAssistancePostSummaryProvider(widget.postId).future,
+      );
+      final summary = r.summary.trim();
+      if (summary.isNotEmpty) {
+        await _speakDescription(summary);
+      }
+    }
   }
 
   Future<void> _initTts() async {
@@ -221,60 +112,292 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     await _flutterTts.setSpeechRate(0.45);
     await _flutterTts.setVolume(1.0);
     await _flutterTts.setPitch(1.0);
+    _flutterTts.setCompletionHandler(() {
+      if (!mounted) return;
+      setState(() {
+        _isTtsSpeaking = false;
+        if (!_ttsPaused) _ttsResumeText = null;
+      });
+    });
+    _flutterTts.setCancelHandler(() {
+      if (!mounted) return;
+      setState(() => _isTtsSpeaking = false);
+    });
+    _flutterTts.setErrorHandler((_) {
+      if (!mounted) return;
+      setState(() => _isTtsSpeaking = false);
+    });
+  }
+
+  Future<void> _loadPostDetailAccessibilityPrefs() async {
+    if (_autoReadPrefLoaded) return;
+    final user = ref.read(authStateProvider).valueOrNull;
+    final visual =
+        TypeHandicap.fromApiString(user?.typeHandicap) == TypeHandicap.visuel;
+    final on = await AccessibilityPostPrefs.effectivePostDetailAutoRead(
+      visualProfileDefault: visual,
+    );
+    final rateIdx = await AccessibilityPostPrefs.postDetailTtsRateIndex();
+    final simple = await AccessibilityPostPrefs.postDetailSimplifiedUi();
+    if (!mounted) return;
+    setState(() {
+      _autoReadPrefLoaded = true;
+      _autoReadSwitchOn = on;
+      _ttsRateIndex = rateIdx;
+      _simplifiedUi = simple;
+    });
+    await _applySpeechRate();
+  }
+
+  Future<void> _setSimplifiedUi(bool value) async {
+    await AccessibilityPostPrefs.setPostDetailSimplifiedUi(value);
+    if (!mounted) return;
+    setState(() => _simplifiedUi = value);
+  }
+
+  Future<void> _applySpeechRate() async {
+    final r = AccessibilityPostPrefs.speechRateForTtsIndex(_ttsRateIndex);
+    await _flutterTts.setSpeechRate(r);
+  }
+
+  Future<void> _setTtsRateIndex(int index) async {
+    final i = index.clamp(0, 2);
+    await AccessibilityPostPrefs.setPostDetailTtsRateIndex(i);
+    if (!mounted) return;
+    setState(() => _ttsRateIndex = i);
+    await _applySpeechRate();
+  }
+
+  Future<void> _setAutoReadEnabled(bool value) async {
+    await AccessibilityPostPrefs.setPostDetailAutoReadEnabled(value);
+    if (!mounted) return;
+    setState(() {
+      _autoReadSwitchOn = value;
+      _autoReadPrefLoaded = true;
+    });
   }
 
   @override
   void dispose() {
+    unawaited(_commentSpeech.stop());
     _flutterTts.stop();
     _commentController.dispose();
     super.dispose();
   }
 
-  /// Message lisible pour les erreurs API (timeouts, 403, corps Nest).
-  String _readableApiError(Object e) {
-    if (e is DioException) {
-      final data = e.response?.data;
-      if (data is Map<String, dynamic>) {
-        final msg = data['message'];
-        if (msg is String && msg.isNotEmpty) return msg;
-        if (msg is List && msg.isNotEmpty) {
-          final first = msg.first;
-          if (first is String) return first;
-          if (first is Map && first['msg'] is String) {
-            return first['msg'] as String;
-          }
-        }
-      }
-      switch (e.type) {
-        case DioExceptionType.connectionTimeout:
-        case DioExceptionType.sendTimeout:
-        case DioExceptionType.receiveTimeout:
-          return 'Délai réseau dépassé. L’analyse photo (Ollama) peut prendre plusieurs minutes au 1ᵉʳ lancement — réessayez ou testez depuis l’app mobile. Vérifiez ollama serve.';
-        default:
-          break;
-      }
-      if (e.response?.statusCode == 401) {
-        return 'Session expirée : reconnectez-vous.';
-      }
-      final m = e.message;
-      if (m != null && m.isNotEmpty) return m;
+  Future<void> _ensureCommentSpeechReady() async {
+    if (_speechReady) return;
+    if (kIsWeb) return;
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Autorisez le micro pour dicter un commentaire.')),
+      );
+      return;
     }
-    return e.toString();
+    final ok = await _commentSpeech.initialize(
+      onError: (_) {
+        if (!mounted) return;
+        setState(() {
+          _speechReady = false;
+          _isCommentListening = false;
+        });
+      },
+      onStatus: (status) {
+        if (!mounted) return;
+        if (status == 'done' || status == 'notListening') {
+          setState(() => _isCommentListening = false);
+        }
+      },
+    );
+    var localeId = 'fr_FR';
+    try {
+      final locales = await _commentSpeech.locales();
+      final fr = locales.firstWhere(
+        (l) => l.localeId.toLowerCase().startsWith('fr'),
+        orElse: () => locales.isNotEmpty
+            ? locales.first
+            : stt.LocaleName('fr_FR', 'French'),
+      );
+      localeId = fr.localeId;
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _speechReady = ok;
+      _commentLocaleId = localeId;
+    });
+  }
+
+  Future<void> _toggleCommentVoiceInput() async {
+    if (kIsWeb) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La dictée commentaire nécessite l’application mobile.')),
+      );
+      return;
+    }
+    if (_isCommentListening) {
+      await _commentSpeech.stop();
+      if (mounted) setState(() => _isCommentListening = false);
+      return;
+    }
+    await _ensureCommentSpeechReady();
+    if (!_speechReady || !mounted) return;
+    setState(() => _isCommentListening = true);
+    try {
+      await _commentSpeech.listen(
+        localeId: _commentLocaleId,
+        listenFor: const Duration(seconds: 45),
+        pauseFor: const Duration(seconds: 3),
+        listenOptions: stt.SpeechListenOptions(
+          partialResults: true,
+          listenMode: stt.ListenMode.dictation,
+        ),
+        onResult: (r) {
+          if (!mounted) return;
+          final text = r.recognizedWords.trim();
+          if (text.isEmpty) return;
+          setState(() {
+            _commentController.text = text;
+            _commentController.selection = TextSelection.fromPosition(
+              TextPosition(offset: _commentController.text.length),
+            );
+          });
+          if (r.finalResult) {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(content: Text('Votre commentaire vocal est prêt.')),
+            );
+          }
+        },
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isCommentListening = false);
+    }
+  }
+
+  Future<void> _retryCommentVoiceInput() async {
+    if (_isCommentListening) {
+      await _commentSpeech.stop();
+      if (mounted) setState(() => _isCommentListening = false);
+    }
+    if (!mounted) return;
+    _commentController.clear();
+    await _toggleCommentVoiceInput();
+  }
+
+  Future<void> _cancelCommentVoiceInput() async {
+    if (_isCommentListening) {
+      await _commentSpeech.stop();
+    }
+    if (!mounted) return;
+    setState(() {
+      _isCommentListening = false;
+      _commentController.clear();
+    });
+  }
+
+  String _commentReadableLine(CommentModel c, int idx, int total) {
+    final name = c.userName.trim().isEmpty ? 'Utilisateur' : c.userName.trim();
+    return 'Commentaire ${idx + 1} sur $total. $name. ${c.contenu.trim()}';
+  }
+
+  Future<void> _readCommentAtIndex(List<CommentModel> comments, int index) async {
+    if (comments.isEmpty) return;
+    final safe = index.clamp(0, comments.length - 1);
+    if (_ttsCommentIndex == -1 || _ttsCommentsContext.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Lecture des commentaires commencée.')),
+      );
+    }
+    setState(() {
+      _ttsCommentsContext = List<CommentModel>.from(comments);
+      _ttsCommentIndex = safe;
+    });
+    await _speakDescription(_commentReadableLine(
+      comments[safe],
+      safe,
+      comments.length,
+    ));
+  }
+
+  Future<void> _readAllComments(List<CommentModel> comments) async {
+    if (comments.isEmpty) return;
+    setState(() {
+      _ttsCommentsContext = List<CommentModel>.from(comments);
+      _ttsCommentIndex = 0;
+    });
+    final text = comments
+        .asMap()
+        .entries
+        .map((e) => _commentReadableLine(e.value, e.key, comments.length))
+        .join(' ');
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('Lecture des commentaires commencée.')),
+    );
+    await _speakDescription(text);
+  }
+
+  Future<void> _readPreviousComment() async {
+    if (_ttsCommentsContext.isEmpty) return;
+    final prev = (_ttsCommentIndex <= 0) ? 0 : _ttsCommentIndex - 1;
+    await _readCommentAtIndex(_ttsCommentsContext, prev);
+  }
+
+  Future<void> _readNextComment() async {
+    if (_ttsCommentsContext.isEmpty) return;
+    final next = (_ttsCommentIndex < 0)
+        ? 0
+        : (_ttsCommentIndex >= _ttsCommentsContext.length - 1)
+            ? _ttsCommentsContext.length - 1
+            : _ttsCommentIndex + 1;
+    await _readCommentAtIndex(_ttsCommentsContext, next);
+  }
+
+  Future<void> _replayCurrentComment() async {
+    if (_ttsCommentsContext.isEmpty || _ttsCommentIndex < 0) return;
+    await _readCommentAtIndex(_ttsCommentsContext, _ttsCommentIndex);
+  }
+
+  String _ttsReadableForPost(PostModel post) {
+    return ref.read(postDetailAssistanceProvider).buildTtsReadablePost(post);
+  }
+
+  Future<void> _runAutoSpeakIfEligible(PostModel post) async {
+    await _loadPostDetailAccessibilityPrefs();
+    if (!mounted || !_autoReadSwitchOn) return;
+    final t = _ttsReadableForPost(post).trim();
+    if (t.isEmpty) return;
+    final dedupKey = '${post.id}|${t.hashCode}';
+    if (_lastAutoSpeakDedupKey == dedupKey) return;
+    _lastAutoSpeakDedupKey = dedupKey;
+    await _speakDescription(t);
   }
 
   Future<void> _speakDescription(String text) async {
     final t = text.trim();
     if (t.isEmpty) return;
     try {
+      _ttsResumeText = t;
+      _ttsPaused = false;
       // Langue TTS selon préférence utilisateur (FR/AR).
       final user = ref.read(authStateProvider).valueOrNull;
       final lang = (user?.preferredLanguage?.name ?? '').toLowerCase();
       final ttsLang = lang == 'ar' ? 'ar' : 'fr-FR';
       await _flutterTts.stop();
+      if (mounted) {
+        setState(() {
+          _isTtsSpeaking = true;
+          _ttsPaused = false;
+        });
+      }
+      await _applySpeechRate();
       await _flutterTts.setLanguage(ttsLang);
       await _flutterTts.speak(t);
     } catch (e) {
       if (!mounted) return;
+      setState(() => _isTtsSpeaking = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -284,6 +407,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _stopTts() async {
+    await _flutterTts.stop();
+    if (mounted) {
+      setState(() {
+        _isTtsSpeaking = false;
+        _ttsPaused = false;
+        _ttsResumeText = null;
+      });
+    }
+  }
+
+  Future<void> _pauseTts() async {
+    if (!_isTtsSpeaking) return;
+    await _flutterTts.stop();
+    if (mounted) {
+      setState(() {
+        _isTtsSpeaking = false;
+        _ttsPaused = true;
+      });
     }
   }
 
@@ -319,255 +464,92 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     }
   }
 
-  Future<void> _readSimplified(String postContent) async {
-    if (_isSimplifyingText) return;
-    setState(() => _isSimplifyingText = true);
-    final u0 = ref.read(authStateProvider).valueOrNull;
-    final s0 = AppStrings.fromPreferredLanguage(u0?.preferredLanguage?.name);
-    showDialog<void>(
+  Future<void> _confirmDeletePost() async {
+    final ok = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            content: Row(
-              children: [
-                const SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: Text(
-                    s0.falcSimplificationLoading,
-                    style: Theme.of(dialogCtx).textTheme.bodyLarge,
-                  ),
-                ),
-              ],
-            ),
+      builder: (ctx) => AlertDialog(
+        title: const Text('Supprimer ce post'),
+        content: const Text(
+          'Voulez-vous vraiment supprimer ce post ? Cette action est définitive.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Annuler')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Supprimer'),
           ),
-        );
-      },
+        ],
+      ),
     );
+    if (ok != true || !mounted) return;
+    setState(() => _deletePostBusy = true);
     try {
-      final repository = ref.read(communityRepositoryProvider);
-      final simplified = await repository.simplifyText(text: postContent);
-
-      if (!mounted) return;
-      context.pop();
-      final user = ref.read(authStateProvider).valueOrNull;
-      final isVisualUser =
-          TypeHandicap.fromApiString(user?.typeHandicap) == TypeHandicap.visuel;
-      final strings = AppStrings.fromPreferredLanguage(
-        user?.preferredLanguage?.name,
-      );
-      final speechText = _formatSimplifiedForSpeech(simplified);
-      final speechKey = speechText;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(strings.simplifiedVersionTitle),
-              if (simplified.source != null) ...[
-                const SizedBox(height: 8),
-                Chip(
-                  label: Text(
-                    simplified.source == 'ollama'
-                        ? strings.simplifySourceOllama
-                        : strings.simplifySourceHeuristic,
-                    style: Theme.of(ctx).textTheme.labelSmall,
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                ),
-              ],
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatSimplifiedForUi(simplified),
-                  softWrap: true,
-                  style: Theme.of(ctx).textTheme.bodyLarge,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            if (isVisualUser && speechText.isNotEmpty)
-              FilledButton.icon(
-                onPressed: () => _speakDescription(speechText),
-                icon: const Icon(Icons.record_voice_over),
-                label: const Text('Lire en audio'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Fermer'),
-            ),
-          ],
-        ),
-      );
-
-      // Lecture automatique (une seule fois) pour les non-voyants.
-      if (isVisualUser && speechKey.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (!mounted) return;
-          if (_lastSpokenSimplifiedKey == speechKey) return;
-          _lastSpokenSimplifiedKey = speechKey;
-          await _speakDescription(speechText);
-        });
-      }
+      await ref.read(communityRepositoryProvider).deletePost(widget.postId);
+      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: false)));
+      ref.invalidate(communityFeedProvider((page: 1, limit: 20, smart: true)));
+      ref.invalidate(postByIdProvider(widget.postId));
+      if (mounted) context.pop();
     } catch (e) {
-      if (!mounted) return;
-      if (Navigator.of(context).canPop()) {
-        context.pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+        );
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur simplification : ${_readableApiError(e)}'),
-          backgroundColor: Colors.red,
-        ),
-      );
     } finally {
-      if (mounted) setState(() => _isSimplifyingText = false);
+      if (mounted) setState(() => _deletePostBusy = false);
     }
   }
 
-  Future<void> _loadImageAudioDescription({
+  bool _canDeleteComment({
     required PostModel post,
-    required int imageIndex,
+    required CommentModel comment,
+    required dynamic user,
+  }) {
+    if (user == null) return false;
+    return user.isAdmin == true ||
+        comment.userId == user.id ||
+        post.userId == user.id;
+  }
+
+  Future<void> _confirmDeleteComment({
+    required PostModel post,
+    required CommentModel comment,
   }) async {
-    final u0 = ref.read(authStateProvider).valueOrNull;
-    final s0 = AppStrings.fromPreferredLanguage(u0?.preferredLanguage?.name);
-    showDialog<void>(
+    if (_deletingCommentId != null) return;
+    final ok = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            content: Row(
-              children: [
-                const SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: Text(
-                    s0.imageAnalysisLoading,
-                    style: Theme.of(dialogCtx).textTheme.bodyLarge,
-                  ),
-                ),
-              ],
-            ),
+      builder: (ctx) => AlertDialog(
+        title: const Text('Supprimer ce commentaire'),
+        content: const Text('Confirmer la suppression de ce commentaire ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Annuler'),
           ),
-        );
-      },
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
     );
+    if (ok != true || !mounted) return;
+    setState(() => _deletingCommentId = comment.id);
     try {
-      final repository = ref.read(communityRepositoryProvider);
-      final ImageVisionDescription result =
-          await repository.getPostImageAccessibilityDescription(
-        postId: post.id,
-        imageIndex: imageIndex,
-      );
-      if (!mounted) return;
-      context.pop();
-      final u1 = ref.read(authStateProvider).valueOrNull;
-      final dialogStrings =
-          AppStrings.fromPreferredLanguage(u1?.preferredLanguage?.name);
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) {
-          return AlertDialog(
-            title: const Text('Description de l’image'),
-            content: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (result.source == 'vision')
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        'Analyse vision (IA)',
-                        style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                              color: Theme.of(ctx).colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                    ),
-                  if (result.displaySummary != null &&
-                      result.displaySummary!.isNotEmpty) ...[
-                    Text(
-                      result.displaySummary!,
-                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      dialogStrings.imageDetailForReadingAndTts,
-                      style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                            color: Theme.of(ctx).colorScheme.outline,
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                  ],
-                  if (result.source == 'vision' &&
-                      result.description.trim().isNotEmpty)
-                    Text(
-                      _cleanImageDescriptionText(result.description),
-                      softWrap: true,
-                    ),
-                  if (result.textDetected != null &&
-                      result.textDetected!.trim().isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      'Texte lisible sur l’image',
-                      style: Theme.of(ctx).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(result.textDetected!, softWrap: true),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Fermer'),
-              ),
-              FilledButton.icon(
-                onPressed: () => _speakDescription(
-                  _cleanImageDescriptionText(result.textForSpeech),
-                ),
-                icon: const Icon(Icons.record_voice_over),
-                label: const Text('Lire à voix haute'),
-              ),
-            ],
+      await ref.read(communityRepositoryProvider).deleteComment(
+            postId: post.id,
+            commentId: comment.id,
           );
-        },
-      );
+      ref.invalidate(postCommentsProvider(widget.postId));
+      ref.invalidate(postByIdProvider(widget.postId));
     } catch (e) {
-      if (!mounted) return;
-      context.pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Description image : ${_readableApiError(e)}'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _deletingCommentId = null);
     }
   }
 
@@ -577,215 +559,483 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     final strings =
         AppStrings.fromPreferredLanguage(user?.preferredLanguage?.name);
     final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
 
     final postAsync = ref.watch(postByIdProvider(widget.postId));
     final commentsAsync = ref.watch(postCommentsProvider(widget.postId));
-    final flashSummaryAsync =
-        ref.watch(postCommentsFlashSummaryProvider(widget.postId));
-    final visionCapabilitiesAsync =
-        ref.watch(communityVisionCapabilitiesProvider);
+    final assistedSummaryAsync =
+        ref.watch(postDetailAssistancePostSummaryProvider(widget.postId));
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         title: Text(strings.postDetails),
+        actions: [
+          IconButton(
+            tooltip: _simplifiedUi
+                ? 'Affichage habituel'
+                : 'Interface simplifiée (gros texte, moins de détail)',
+            icon: Icon(
+              _simplifiedUi
+                  ? Icons.view_compact_alt_outlined
+                  : Icons.accessibility_new,
+            ),
+            onPressed: () => _setSimplifiedUi(!_simplifiedUi),
+          ),
+          if (user?.isAdmin == true)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              tooltip: 'Modération',
+              onSelected: (v) {
+                if (v == 'delete') _confirmDeletePost();
+              },
+              itemBuilder: (ctx) => const [
+                PopupMenuItem(
+                  value: 'delete',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('Supprimer ce post'),
+                    subtitle: Text('Spam ou photo inappropriée'),
+                  ),
+                ),
+              ],
+            ),
+        ],
       ),
       body: postAsync.when(
         data: (post) {
-          final handicap = TypeHandicap.fromApiString(user?.typeHandicap);
-          final wantsPhotoAnalysis = handicap == TypeHandicap.visuel;
-          final wantsSimplify =
-              handicap == TypeHandicap.cognitif || handicap == TypeHandicap.visuel;
-          final wantsAny = wantsPhotoAnalysis || wantsSimplify;
-
-          final hasImages = post.images != null && post.images!.isNotEmpty;
           final hasContent = post.contenu.trim().isNotEmpty;
+          final canDeletePost = user != null &&
+              (user.isAdmin == true || post.userId == user.id);
+          final dangerMsg = postDetailDangerBannerMessage(post);
+          final pad = _simplifiedUi ? 20.0 : 16.0;
+          final sectionTitleStyle = _simplifiedUi
+              ? theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 20,
+                )
+              : theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                );
+          final bodyStyle = _simplifiedUi
+              ? theme.textTheme.bodyLarge?.copyWith(
+                  fontSize: 18,
+                  height: 1.35,
+                  fontWeight: FontWeight.w500,
+                )
+              : theme.textTheme.bodyLarge?.copyWith(height: 1.45);
 
-          // Précharge en arrière-plan pour que le clic utilisateur soit rapide.
-          if (!_prefetchStarted && wantsAny) {
-            _prefetchStarted = true;
+          /// Lecture auto une fois les données disponibles (préférence profil ou réglage).
+          if (hasContent && _autoSpeakScheduledPostId != post.id) {
+            _autoSpeakScheduledPostId = post.id;
             WidgetsBinding.instance.addPostFrameCallback((_) async {
-              if (!mounted) return;
-              final repository = ref.read(communityRepositoryProvider);
-              try {
-                if (wantsSimplify && hasContent) {
-                  await repository.simplifyText(text: post.contenu);
-                }
-                // Important : on préchauffe même si `visionCapabilitiesAsync`
-                // n'est pas encore prêt (valueOrNull peut être null au premier build).
-                // Le clic utilisateur relancera en cas d'échec.
-                if (wantsPhotoAnalysis && hasImages) {
-                  final count = post.images?.length ?? 0;
-                  final indices = count <= 2
-                      ? List<int>.generate(count, (i) => i)
-                      : const [0];
-                  for (final imageIndex in indices) {
-                    await repository.getPostImageAccessibilityDescription(
-                      postId: post.id,
-                      imageIndex: imageIndex,
-                    );
-                  }
-                }
-              } catch (_) {
-                // On ignore: la récupération exacte sera faite au clic.
-              }
+              await _runAutoSpeakIfEligible(post);
             });
           }
-
-          // Lecture automatique du texte du post pour les utilisateurs
-          // handicap visuel (non-voyants), une seule fois par ouverture.
-          if (wantsPhotoAnalysis && hasContent) {
-            final postKey = '${post.id}|${post.contenu.hashCode}';
+          if ((widget.autoReadPost ||
+                  widget.autoReadComments ||
+                  widget.autoReadSummary) &&
+              _autoActionDedupKey == null) {
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               if (!mounted) return;
-              if (_lastSpokenPostKey == postKey) return;
-              _lastSpokenPostKey = postKey;
-              await _speakDescription(post.contenu);
+              await _runRouteAutoActions(post);
             });
           }
 
           return Column(
             children: [
-              visionCapabilitiesAsync.when(
-                data: (m) {
-                  final geminiOk = m['geminiConfigured'] == true;
-                  final ollamaOk = m['ollamaReachable'] == true;
-                  if (geminiOk || ollamaOk) return const SizedBox.shrink();
-                  // On masque le message d'installation/configuration Ollama.
-                  // (Affichage réservé si tu veux une aide utilisateur dans une autre UI.)
-                  return const SizedBox.shrink();
-                },
-                loading: () => const SizedBox.shrink(),
-                error: (_, _) => const SizedBox.shrink(),
-              ),
-              // Post principal
               Expanded(
                 child: SingleChildScrollView(
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
                   physics: const ClampingScrollPhysics(),
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.all(pad),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // En-tête du post
                       _PostHeader(post: post),
-                      const SizedBox(height: 16),
-                      Divider(color: theme.colorScheme.outline),
-                      const SizedBox(height: 16),
-                      // Contenu complet + accès explicite FALC
-                      Text(
-                        post.contenu,
-                        style: theme.textTheme.bodyLarge,
-                        softWrap: true,
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.start,
-                        children: [
-                          FilledButton.tonalIcon(
-                            onPressed: _isSimplifyingText
-                                ? null
-                                : () => _readSimplified(post.contenu),
-                            icon: _isSimplifyingText
-                                ? SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: primary,
+                      if (dangerMsg != null) ...[
+                        const SizedBox(height: 14),
+                        Semantics(
+                          liveRegion: true,
+                          child: Material(
+                            color: theme.colorScheme.errorContainer,
+                            borderRadius: BorderRadius.circular(14),
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: theme.colorScheme.onErrorContainer,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      dangerMsg,
+                                      style: theme.textTheme.bodyMedium?.copyWith(
+                                        color: theme.colorScheme.onErrorContainer,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.35,
+                                      ),
                                     ),
-                                  )
-                                : const Icon(Icons.auto_fix_high_outlined),
-                            label: Text(strings.simplifyText),
-                          ),
-                          if (wantsPhotoAnalysis)
-                            FilledButton.tonalIcon(
-                              onPressed: () => _speakDescription(
-                                post.contenu.trim(),
+                                  ),
+                                ],
                               ),
-                              icon: const Icon(Icons.volume_up_outlined),
-                              label: const Text('Lire le texte'),
                             ),
-                        ],
-                      ),
-                      if (post.images != null && post.images!.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        ...post.images!.asMap().entries.map((entry) {
-                          final imageIndex = entry.key;
-                          final path = entry.value;
-                          final url = CommunityRepository.uploadUrl(path);
-                          final visualProfile = isVisualHandicapProfile(
-                            user?.typeHandicap,
-                          );
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.network(
-                                    url,
-                                    width: double.infinity,
-                                    fit: BoxFit.cover,
-                                    loadingBuilder: (_, child, progress) {
-                                      if (progress == null) return child;
-                                      return SizedBox(
-                                        height: 200,
-                                        child: Center(
-                                          child: CircularProgressIndicator(
-                                            value: progress.expectedTotalBytes !=
-                                                    null
-                                                ? progress.cumulativeBytesLoaded /
-                                                    progress.expectedTotalBytes!
-                                                : null,
-                                          ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Card(
+                        margin: EdgeInsets.zero,
+                        elevation: _simplifiedUi ? 1.5 : 0.5,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          side: BorderSide(
+                            color: theme.colorScheme.outline
+                                .withValues(alpha: 0.28),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.all(_simplifiedUi ? 18 : 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Semantics(
+                                header: true,
+                                child: Text(
+                                  _simplifiedUi ? 'Texte du post' : 'Contenu du post',
+                                  style: sectionTitleStyle,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                post.contenu,
+                                style: bodyStyle,
+                                softWrap: true,
+                              ),
+                              if (post.images != null && post.images!.isNotEmpty) ...[
+                                const SizedBox(height: 12),
+                                ...post.images!.map((path) {
+                                  final url = CommunityRepository.uploadUrl(path);
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Image.network(
+                                        url,
+                                        width: double.infinity,
+                                        fit: BoxFit.cover,
+                                        loadingBuilder: (_, child, progress) {
+                                          if (progress == null) return child;
+                                          return SizedBox(
+                                            height: 180,
+                                            child: Center(
+                                              child: CircularProgressIndicator(
+                                                value: progress.expectedTotalBytes != null
+                                                    ? progress.cumulativeBytesLoaded /
+                                                        progress.expectedTotalBytes!
+                                                    : null,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        errorBuilder: (_, _, _) => Container(
+                                          height: 120,
+                                          color: theme.colorScheme.surfaceContainerHighest,
+                                          alignment: Alignment.center,
+                                          child: const Icon(Icons.broken_image),
                                         ),
-                                      );
-                                    },
-                                    errorBuilder: (_, _, _) => Container(
-                                      height: 120,
-                                      color: theme
-                                          .colorScheme.surfaceContainerHighest,
-                                      alignment: Alignment.center,
-                                      child: const Icon(Icons.broken_image),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                              const SizedBox(height: 12),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Semantics(
+                                  hint:
+                                      'Active ou désactive la lecture vocale automatique '
+                                      'du post à l\'ouverture.',
+                                  child: Text(
+                                    'Lecture automatique à l\'ouverture',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ),
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: TextButton.icon(
-                                      onPressed: () => _loadImageAudioDescription(
-                                        post: post,
-                                        imageIndex: imageIndex,
-                                      ),
-                                      icon: Icon(
-                                        visualProfile
-                                            ? Icons.headphones
-                                            : Icons.image_search_outlined,
-                                        size: 20,
-                                      ),
-                                      label: Text(
-                                        visualProfile
-                                            ? strings.imageDescriptionAndAudio
-                                            : strings.analyzeImageWithAi,
+                                subtitle: Text(
+                                  _autoReadPrefLoaded
+                                      ? 'Une fois le post affiché. Par défaut actif '
+                                          'pour les profils malvoyants jusqu’à votre choix.'
+                                      : 'Chargement du réglage…',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                value: _autoReadSwitchOn,
+                                onChanged: !_autoReadPrefLoaded || !hasContent
+                                    ? null
+                                    : _setAutoReadEnabled,
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Semantics(
+                                      button: true,
+                                      label: hasContent
+                                          ? 'Lire le post avec la synthèse vocale'
+                                          : 'Contenu vide',
+                                      child: FilledButton.tonalIcon(
+                                        onPressed: !hasContent ||
+                                                (_isTtsSpeaking && !_ttsPaused)
+                                            ? null
+                                            : () {
+                                                if (_ttsPaused &&
+                                                    _ttsResumeText != null) {
+                                                  _speakDescription(
+                                                    _ttsResumeText!,
+                                                  );
+                                                } else {
+                                                  _speakDescription(
+                                                    _ttsReadableForPost(post),
+                                                  );
+                                                }
+                                              },
+                                        style: FilledButton.styleFrom(
+                                          minimumSize: Size(
+                                            double.infinity,
+                                            _simplifiedUi ? 54 : 48,
+                                          ),
+                                        ),
+                                        icon: Icon(
+                                          _ttsPaused
+                                              ? Icons.play_arrow_rounded
+                                              : Icons.volume_up_rounded,
+                                          color: theme.colorScheme.primary,
+                                        ),
+                                        label: Text(
+                                          _ttsPaused
+                                              ? 'Reprendre'
+                                              : '\u{1F50A} Lire le post',
+                                        ),
                                       ),
                                     ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Semantics(
+                                    button: true,
+                                    label: 'Pause lecture vocale',
+                                    child: IconButton.filledTonal(
+                                      tooltip: 'Pause',
+                                      icon: const Icon(Icons.pause_rounded),
+                                      style: IconButton.styleFrom(
+                                        minimumSize: Size(
+                                          52,
+                                          _simplifiedUi ? 54 : 48,
+                                        ),
+                                      ),
+                                      onPressed: (_isTtsSpeaking && !_ttsPaused)
+                                          ? _pauseTts
+                                          : null,
+                                    ),
+                                  ),
+                                  Semantics(
+                                    button: true,
+                                    label: 'Arrêter la synthèse vocale',
+                                    child: IconButton.filledTonal(
+                                      tooltip: 'Arrêter',
+                                      icon: const Icon(Icons.stop_circle_outlined),
+                                      style: IconButton.styleFrom(
+                                        minimumSize: Size(
+                                          52,
+                                          _simplifiedUi ? 54 : 48,
+                                        ),
+                                      ),
+                                      onPressed: (_isTtsSpeaking || _ttsPaused)
+                                          ? _stopTts
+                                          : null,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (_autoReadPrefLoaded) ...[
+                                const SizedBox(height: 14),
+                                Text(
+                                  'Vitesse de la voix',
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Semantics(
+                                  label:
+                                      'Choisir la vitesse de lecture : lent, normal ou rapide',
+                                  child: SegmentedButton<int>(
+                                    segments: const [
+                                      ButtonSegment<int>(
+                                        value: 0,
+                                        label: Text('Lent'),
+                                        icon: Icon(Icons.slow_motion_video_outlined),
+                                      ),
+                                      ButtonSegment<int>(
+                                        value: 1,
+                                        label: Text('Normal'),
+                                      ),
+                                      ButtonSegment<int>(
+                                        value: 2,
+                                        label: Text('Rapide'),
+                                        icon: Icon(Icons.fast_forward_outlined),
+                                      ),
+                                    ],
+                                    selected: {_ttsRateIndex},
+                                    onSelectionChanged: (s) {
+                                      final v = s.first;
+                                      _setTtsRateIndex(v);
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      assistedSummaryAsync.when(
+                        data: (r) {
+                          if (r.summary.trim().isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return Card(
+                            margin: EdgeInsets.zero,
+                            elevation: _simplifiedUi ? 1.5 : 0.5,
+                            color: theme.colorScheme.surfaceContainerHigh,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                              side: BorderSide(
+                                color: theme.colorScheme.primary
+                                    .withValues(alpha: 0.35),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: EdgeInsets.all(_simplifiedUi ? 18 : 16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.psychology_outlined,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Résumé assisté',
+                                          style: sectionTitleStyle?.copyWith(
+                                            color: theme.colorScheme.primary,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    r.summary,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: (_simplifiedUi
+                                            ? theme.textTheme.bodyLarge
+                                            : theme.textTheme.bodyMedium)
+                                        ?.copyWith(height: 1.35),
+                                  ),
+                                  ExpansionTile(
+                                    tilePadding: EdgeInsets.zero,
+                                    childrenPadding: EdgeInsets.zero,
+                                    title: const Text('Voir plus'),
+                                    children: [
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(bottom: 10),
+                                          child: Text(
+                                            r.summary,
+                                            style: (_simplifiedUi
+                                                    ? theme.textTheme.bodyLarge
+                                                    : theme.textTheme.bodyMedium)
+                                                ?.copyWith(height: 1.45),
+                                          ),
+                                        ),
+                                      ),
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: OutlinedButton.icon(
+                                          onPressed: !_isTtsSpeaking
+                                              ? () => _speakDescription(r.summary)
+                                              : null,
+                                          icon: const Icon(Icons.volume_up_outlined),
+                                          label: const Text('Écouter ce résumé'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                        loading: () => Card(
+                          margin: EdgeInsets.zero,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              children: [
+                                const SizedBox(
+                                  width: 26,
+                                  height: 26,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'Préparation du résumé assisté…',
+                                    style: theme.textTheme.bodyMedium,
                                   ),
                                 ),
                               ],
                             ),
-                          );
-                        }),
+                          ),
+                        ),
+                        error: (_, _) => const SizedBox.shrink(),
+                      ),
+                      const SizedBox(height: 16),
+                      if (canDeletePost) ...[
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            onPressed: _deletePostBusy ? null : _confirmDeletePost,
+                            icon: _deletePostBusy
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.delete_outline),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error,
+                            ),
+                            label: const Text('Supprimer ce post'),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
                       ],
-                      const SizedBox(height: 24),
+                      // Commentaires directement après le post.
                       // Commentaires
                       Text(
                         strings.comments,
@@ -795,59 +1045,127 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       ),
                       const SizedBox(height: 12),
 
-                      // Résumé flash automatique (accessibilité)
-                      flashSummaryAsync.when(
-                        data: (flash) {
-                          if (flash.summary.trim().isEmpty) return const SizedBox.shrink();
-                          return Card(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            margin: const EdgeInsets.only(bottom: 12),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Résumé rapide',
-                                    style: theme.textTheme.titleSmall?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    flash.summary,
-                                    style: theme.textTheme.bodyMedium,
-                                    softWrap: true,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                        loading: () => const SizedBox.shrink(),
-                        error: (_, _) => const SizedBox.shrink(),
-                      ),
-
                       // Liste des commentaires
                       commentsAsync.when(
                         data: (comments) {
                           if (comments.isEmpty) {
-                            return Center(
+                            return Card(
+                              margin: EdgeInsets.zero,
                               child: Padding(
-                                padding: const EdgeInsets.all(32),
-                                child: Text(
-                                  strings.noComments,
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  children: [
+                                    Icon(
+                                      Icons.chat_bubble_outline,
+                                      size: 34,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      strings.noComments,
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.bodyMedium?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             );
                           }
                           return Column(
-                            children: comments.map((comment) {
-                              return _CommentCard(comment: comment);
-                            }).toList(),
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  Semantics(
+                                    button: true,
+                                    label: 'Lire les commentaires un par un',
+                                    child: FilledButton.tonalIcon(
+                                      onPressed: !_isTtsSpeaking
+                                          ? () => _readCommentAtIndex(comments, 0)
+                                          : null,
+                                      icon: const Icon(Icons.record_voice_over_outlined),
+                                      label: const Text('Lire les commentaires'),
+                                    ),
+                                  ),
+                                  Semantics(
+                                    button: true,
+                                    label: 'Lire tout les commentaires',
+                                    child: OutlinedButton.icon(
+                                      onPressed: !_isTtsSpeaking
+                                          ? () => _readAllComments(comments)
+                                          : null,
+                                      icon: const Icon(Icons.forum_outlined),
+                                      label: const Text('Lire tout'),
+                                    ),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (!_isTtsSpeaking && _ttsCommentsContext.isNotEmpty)
+                                        ? _readPreviousComment
+                                        : null,
+                                    icon: const Icon(Icons.skip_previous),
+                                    label: const Text('Précédent'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (!_isTtsSpeaking && _ttsCommentsContext.isNotEmpty)
+                                        ? _readNextComment
+                                        : null,
+                                    icon: const Icon(Icons.skip_next),
+                                    label: const Text('Suivant'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (!_isTtsSpeaking &&
+                                            _ttsCommentsContext.isNotEmpty &&
+                                            _ttsCommentIndex >= 0)
+                                        ? _replayCurrentComment
+                                        : null,
+                                    icon: const Icon(Icons.replay),
+                                    label: const Text('Replay'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (_isTtsSpeaking && !_ttsPaused)
+                                        ? _pauseTts
+                                        : null,
+                                    icon: const Icon(Icons.pause),
+                                    label: const Text('Pause'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: (_isTtsSpeaking || _ttsPaused)
+                                        ? _stopTts
+                                        : null,
+                                    icon: const Icon(Icons.stop_circle_outlined),
+                                    label: const Text('Stop'),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Card(
+                                margin: EdgeInsets.zero,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    children: comments.map((comment) {
+                                      return _CommentCard(
+                                        comment: comment,
+                                        canDelete: _canDeleteComment(
+                                          post: post,
+                                          comment: comment,
+                                          user: user,
+                                        ),
+                                        deleting: _deletingCommentId == comment.id,
+                                        onDelete: () => _confirmDeleteComment(
+                                          post: post,
+                                          comment: comment,
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ),
+                              ),
+                            ],
                           );
                         },
                         loading: () => const Center(
@@ -867,27 +1185,31 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   ),
                 ),
               ),
-              // Zone de commentaire
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
+                  color: theme.colorScheme.surface,
                   border: Border(
                     top: BorderSide(color: theme.colorScheme.outline),
                   ),
                 ),
                 child: SafeArea(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: TextField(
+                  child: Semantics(
+                    container: true,
+                    label: 'Saisie de commentaire',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
                           controller: _commentController,
                           decoration: InputDecoration(
                             hintText: strings.writeComment,
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(24),
+                              borderRadius: BorderRadius.circular(16),
                             ),
+                            filled: true,
+                            fillColor: theme.colorScheme.surfaceContainerLow,
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 12,
@@ -898,25 +1220,52 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           textInputAction: TextInputAction.send,
                           onSubmitted: (_) => _submitComment(),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        onPressed: _isSubmittingComment ? null : _submitComment,
-                        icon: _isSubmittingComment
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : Icon(Icons.send, color: primary),
-                        style: IconButton.styleFrom(
-                          backgroundColor: primary.withValues(alpha: 0.1),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          padding: const EdgeInsets.all(8),
-                          minimumSize: const Size(40, 40),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.end,
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _toggleCommentVoiceInput,
+                              icon: Icon(
+                                _isCommentListening ? Icons.stop : Icons.mic,
+                              ),
+                              label: Text(
+                                _isCommentListening
+                                    ? 'Arrêter la voix'
+                                    : 'Commenter avec la voix',
+                              ),
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _retryCommentVoiceInput,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Réessayer'),
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _cancelCommentVoiceInput,
+                              icon: const Icon(Icons.close),
+                              label: const Text('Annuler'),
+                            ),
+                            FilledButton.icon(
+                              onPressed: _isSubmittingComment ? null : _submitComment,
+                              icon: _isSubmittingComment
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child:
+                                          CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.send),
+                              label: const Text('Publier'),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1000,65 +1349,81 @@ class _PostHeader extends StatelessWidget {
         break;
     }
 
-    return Row(
-      children: [
-        CircleAvatar(
-          radius: 24,
-          backgroundColor: typeColor.withValues(alpha: 0.12),
-          child: Icon(typeIcon, size: 24, color: typeColor),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      post.userName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: typeColor.withValues(alpha: 0.12),
+                  child: Icon(typeIcon, size: 24, color: typeColor),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        post.userName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                  ),
-                  VerifiedHelperBadge(
-                    trustPoints: post.user?.trustPoints ?? 0,
-                  ),
-                ],
-              ),
-              if (post.createdAt != null)
-                Text(
-                  _formatDate(post.createdAt!),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                      if (post.createdAt != null)
+                        Text(
+                          _formatDate(post.createdAt!),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-        ),
-        Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              color: typeColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
+                if (post.user?.partenaire == true)
+                  const PartnerOrgBadge(compact: true),
+                VerifiedHelperBadge(
+                  trustPoints: post.user?.trustPoints ?? 0,
+                ),
+              ],
             ),
-            child: Text(
-              post.type.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.end,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: typeColor,
-                fontWeight: FontWeight.bold,
-              ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _MetaChip(
+                  icon: Icons.badge_outlined,
+                  label: post.type.displayName,
+                  color: typeColor,
+                ),
+                if ((post.targetAudience ?? '').trim().isNotEmpty)
+                  _MetaChip(
+                    icon: Icons.groups_2_outlined,
+                    label: post.targetAudience!,
+                  ),
+                if ((post.postNature ?? '').trim().isNotEmpty)
+                  _MetaChip(
+                    icon: Icons.category_outlined,
+                    label: post.postNature!,
+                  ),
+                if (post.obstaclePresent)
+                  _MetaChip(
+                    icon: Icons.warning_amber_outlined,
+                    label: 'Obstacle signalé',
+                    color: primary,
+                  ),
+              ],
             ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -1081,9 +1446,17 @@ class _PostHeader extends StatelessWidget {
 }
 
 class _CommentCard extends StatelessWidget {
-  const _CommentCard({required this.comment});
+  const _CommentCard({
+    required this.comment,
+    required this.canDelete,
+    required this.deleting,
+    required this.onDelete,
+  });
 
   final CommentModel comment;
+  final bool canDelete;
+  final bool deleting;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1125,9 +1498,23 @@ class _CommentCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (comment.user?.partenaire == true)
+                        const PartnerOrgBadge(compact: true),
                       VerifiedHelperBadge(
                         trustPoints: comment.user?.trustPoints ?? 0,
                       ),
+                      if (canDelete)
+                        IconButton(
+                          tooltip: 'Supprimer le commentaire',
+                          onPressed: deleting ? null : onDelete,
+                          icon: deleting
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.delete_outline),
+                        ),
                     ],
                   ),
                   if (comment.createdAt != null)
@@ -1169,4 +1556,44 @@ class _CommentCard extends StatelessWidget {
     }
   }
 }
+
+class _MetaChip extends StatelessWidget {
+  const _MetaChip({
+    required this.icon,
+    required this.label,
+    this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = color ?? theme.colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: c),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: c,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 

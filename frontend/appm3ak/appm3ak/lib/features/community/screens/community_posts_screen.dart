@@ -18,16 +18,30 @@ class CommunityPostsScreen extends ConsumerStatefulWidget {
       _CommunityPostsScreenState();
 }
 
+enum _PostsOwnerSegment {
+  mine,
+  others,
+}
+
 class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
   int _currentPage = 1;
   final int _limit = 20;
   PostType? _selectedType;
+  _PostsOwnerSegment _ownerSegment = _PostsOwnerSegment.others;
   /// Filtre backend selon `role` + `typeHandicap` (endpoint `GET /community/posts/for-me`).
   bool _smartProfileFilter = false;
+  bool _filtersExpanded = false;
+
+  Future<void> _openCreatePost(BuildContext context) async {
+    // Le + doit toujours ouvrir l’écran “Créer un post” (formulaire complet).
+    // Les modes accessibilité restent accessibles depuis cet écran.
+    await context.push('/create-post');
+  }
 
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
+    final currentUserId = user?.id.trim();
     final strings =
         AppStrings.fromPreferredLanguage(user?.preferredLanguage?.name);
     final theme = Theme.of(context);
@@ -63,51 +77,90 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline),
-                  onPressed: () => context.push('/create-post'),
+                  onPressed: () => _openCreatePost(context),
                   tooltip: strings.createPost,
                 ),
               ],
             ),
           ),
-          // Filtres : smart profil + types
-          SizedBox(
-            height: 50,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              children: [
-                if (user != null)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: _TypeChip(
-                      label: 'Smart (mon profil)',
-                      selected: _smartProfileFilter,
-                      onTap: () {
-                        setState(() {
-                          _smartProfileFilter = !_smartProfileFilter;
-                          _currentPage = 1;
-                        });
-                      },
-                    ),
-                  ),
-                _TypeChip(
-                  label: strings.allTypes,
-                  selected: _selectedType == null,
-                  onTap: () => setState(() => _selectedType = null),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: SegmentedButton<_PostsOwnerSegment>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment<_PostsOwnerSegment>(
+                  value: _PostsOwnerSegment.mine,
+                  label: Text('Mes posts'),
+                  icon: Icon(Icons.person_outline),
                 ),
-                const SizedBox(width: 8),
-                ...PostType.values.map((type) {
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: _TypeChip(
-                      label: type.displayName,
-                      selected: _selectedType == type,
-                      onTap: () => setState(() => _selectedType = type),
-                    ),
-                  );
-                }),
+                ButtonSegment<_PostsOwnerSegment>(
+                  value: _PostsOwnerSegment.others,
+                  label: Text('Posts des autres'),
+                  icon: Icon(Icons.groups_outlined),
+                ),
               ],
+              selected: {_ownerSegment},
+              onSelectionChanged: (selection) {
+                final next = selection.first;
+                if (next == _ownerSegment) return;
+                setState(() {
+                  _ownerSegment = next;
+                  _currentPage = 1;
+                });
+              },
             ),
+          ),
+          ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+            childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+            initiallyExpanded: _filtersExpanded,
+            onExpansionChanged: (v) => setState(() => _filtersExpanded = v),
+            title: const Text('Filtres'),
+            subtitle: Text(
+              _selectedType == null
+                  ? strings.allTypes
+                  : _selectedType!.displayName,
+            ),
+            children: [
+              SizedBox(
+                height: 50,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    if (user != null)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _TypeChip(
+                          label: 'Smart (mon profil)',
+                          selected: _smartProfileFilter,
+                          onTap: () {
+                            setState(() {
+                              _smartProfileFilter = !_smartProfileFilter;
+                              _currentPage = 1;
+                            });
+                          },
+                        ),
+                      ),
+                    _TypeChip(
+                      label: strings.allTypes,
+                      selected: _selectedType == null,
+                      onTap: () => setState(() => _selectedType = null),
+                    ),
+                    const SizedBox(width: 8),
+                    ...PostType.values.map((type) {
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _TypeChip(
+                          label: type.displayName,
+                          selected: _selectedType == type,
+                          onTap: () => setState(() => _selectedType = type),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ],
           ),
           // (Supprimé) Ancienne bannière d'aide FALC/Ollama.
           // Liste des posts
@@ -126,7 +179,25 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                       .toList();
                 }
 
+                final hasCurrentUser = currentUserId != null && currentUserId.isNotEmpty;
+                filtered = filtered.where((post) {
+                  if (!hasCurrentUser) {
+                    // Fallback sûr: sans utilisateur courant, "Mes posts" vide,
+                    // "Posts des autres" affiche la liste.
+                    return _ownerSegment == _PostsOwnerSegment.others;
+                  }
+                  final authorId = post.userId.trim();
+                  final isMine = authorId.isNotEmpty && authorId == currentUserId;
+                  return _ownerSegment == _PostsOwnerSegment.mine ? isMine : !isMine;
+                }).toList();
+
                 if (filtered.isEmpty) {
+                  final emptyTitle = _ownerSegment == _PostsOwnerSegment.mine
+                      ? 'Vous n’avez pas encore publié.'
+                      : 'Aucune publication des autres pour le moment.';
+                  final emptySubtitle = _ownerSegment == _PostsOwnerSegment.mine
+                      ? strings.beFirstToPost
+                      : 'Revenez plus tard ou publiez votre premier post.';
                   return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -138,21 +209,21 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                         ),
                         const SizedBox(height: 16),
                         Text(
-                          strings.noPosts,
+                          emptyTitle,
                           style: theme.textTheme.titleMedium?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          strings.beFirstToPost,
+                          emptySubtitle,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
                         const SizedBox(height: 24),
                         ElevatedButton.icon(
-                          onPressed: () => context.push('/create-post'),
+                          onPressed: () => _openCreatePost(context),
                           icon: const Icon(Icons.add),
                           label: Text(strings.createPost),
                         ),
@@ -195,6 +266,9 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                             final post = filtered[index];
                             return _PostCard(
                               post: post,
+                              isMine: hasCurrentUser &&
+                                  post.userId.trim().isNotEmpty &&
+                                  post.userId.trim() == currentUserId,
                               onTap: () => context.push(
                                 '/post-detail/${post.id}',
                               ),
@@ -329,10 +403,12 @@ class _TypeChip extends StatelessWidget {
 class _PostCard extends StatelessWidget {
   const _PostCard({
     required this.post,
+    required this.isMine,
     required this.onTap,
   });
 
   final PostModel post;
+  final bool isMine;
   final VoidCallback onTap;
 
   @override
@@ -409,12 +485,14 @@ class _PostCard extends StatelessWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                post.userName,
+                                isMine ? '${post.userName} (vous)' : post.userName,
                                 style: theme.textTheme.titleSmall?.copyWith(
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
+                            if (post.user?.partenaire == true)
+                              const PartnerOrgBadge(compact: true),
                             VerifiedHelperBadge(
                               trustPoints: post.user?.trustPoints ?? 0,
                             ),
@@ -466,7 +544,7 @@ class _PostCard extends StatelessWidget {
                     height: 140,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
                   ),
                 ),
               ],
@@ -474,6 +552,19 @@ class _PostCard extends StatelessWidget {
               // Footer : commentaires
               Row(
                 children: [
+                  Icon(
+                    Icons.volunteer_activism_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${post.merciCount} merci',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
                   Icon(
                     Icons.comment_outlined,
                     size: 16,

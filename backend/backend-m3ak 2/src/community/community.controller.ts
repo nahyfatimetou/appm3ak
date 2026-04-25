@@ -3,10 +3,10 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
-  ParseIntPipe,
   UseGuards,
   UseInterceptors,
   UploadedFiles,
@@ -18,14 +18,19 @@ import {
   ApiBearerAuth,
   ApiConsumes,
   ApiBody,
+  ApiExtraModels,
+  ApiOkResponse,
 } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { randomUUID } from 'crypto';
 import { CommunityService } from './community.service';
-import { CommunityVisionService } from './community-vision.service';
-import { SimplifyTextDto } from '../accessibility/dto/simplify-text.dto';
 import { CreatePostDto } from './dto/create-post.dto';
+import { CreateHelpRequestDto } from './dto/create-help-request.dto';
+import { HelpRequestsPaginatedDto } from './dto/help-requests-paginated.dto';
+import { CommunityActionPlanRequestDto } from './dto/community-action-plan-request.dto';
+import { HelpRequest } from './schemas/help-request.schema';
+import { ValidatePostObstacleDto } from './dto/validate-post-obstacle.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserDocument } from '../user/schemas/user.schema';
@@ -40,29 +45,20 @@ const postImageStorage = diskStorage({
 });
 
 @ApiTags('Community')
+@ApiExtraModels(HelpRequest, CreateHelpRequestDto)
 @Controller('community')
 export class CommunityController {
-  constructor(
-    private readonly communityService: CommunityService,
-    private readonly communityVision: CommunityVisionService,
-  ) {}
+  constructor(private readonly communityService: CommunityService) {}
 
-  @Get('vision/capabilities')
+  @Post('ai/action-plan')
   @ApiOperation({
     summary:
-      'IA communauté (FALC + analyse photo) : flags Ollama/Gemini, ping — même schéma que GET /accessibility/features',
+      'Proxy IA communauté: pré-remplir create_post ou create_help_request depuis texte libre',
   })
-  async getVisionCapabilities() {
-    return this.communityVision.getCapabilities();
-  }
-
-  @Post('vision/simplify-text')
-  @ApiOperation({
-    summary:
-      'Simplifier le texte d’un post (FALC) — même comportement que POST /accessibility/simplify-text',
-  })
-  async simplifyTextCommunity(@Body() body: SimplifyTextDto) {
-    return this.communityVision.simplifyTextFalc(body.text, body.level ?? 'facile');
+  async actionPlan(
+    @Body() body: CommunityActionPlanRequestDto,
+  ) {
+    return this.communityService.analyzeCommunityAction(body);
   }
 
   @Post('posts')
@@ -91,6 +87,13 @@ export class CommunityController {
       properties: {
         contenu: { type: 'string' },
         type: { type: 'string' },
+        latitude: { type: 'number', description: 'Optionnel — carte Lieu' },
+        longitude: { type: 'number' },
+        dangerLevel: {
+          type: 'string',
+          enum: ['none', 'low', 'medium', 'critical'],
+          description: 'Si critical + coords → alerte SOS zone Aide',
+        },
         images: {
           type: 'array',
           items: { type: 'string', format: 'binary' },
@@ -112,7 +115,82 @@ export class CommunityController {
       body.contenu,
       body.type,
       paths,
+      {
+        latitude: body.latitude,
+        longitude: body.longitude,
+        dangerLevel: body.dangerLevel,
+        postNature: body.postNature,
+        targetAudience: body.targetAudience,
+        inputMode: body.inputMode,
+        isForAnotherPerson: body.isForAnotherPerson,
+        needsAudioGuidance: body.needsAudioGuidance,
+        needsVisualSupport: body.needsVisualSupport,
+        needsPhysicalAssistance: body.needsPhysicalAssistance,
+        needsSimpleLanguage: body.needsSimpleLanguage,
+        locationSharingMode: body.locationSharingMode,
+      },
     );
+  }
+
+  @Post('posts/:postId/validate-obstacle')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Validation communautaire : confirmer ou infirmer qu’un obstacle signalé est toujours présent',
+  })
+  async validatePostObstacle(
+    @Param('postId') postId: string,
+    @CurrentUser() user: UserDocument,
+    @Body() body: ValidatePostObstacleDto,
+  ) {
+    return this.communityService.validatePostObstacle(
+      postId,
+      user._id.toString(),
+      body.confirm,
+    );
+  }
+
+  @Post('posts/:postId/merci')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Remercier un signalement (toggle) — alternative positive au « Like »',
+  })
+  async togglePostMerci(
+    @Param('postId') postId: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    return this.communityService.togglePostMerci(postId, user._id.toString());
+  }
+
+  @Get('posts/:postId/merci-state')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'État Merci pour l’utilisateur connecté' })
+  async getMerciState(
+    @Param('postId') postId: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    return this.communityService.merciStateForUser(
+      postId,
+      user._id.toString(),
+    );
+  }
+
+  @Delete('posts/:postId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Supprimer un post (auteur du post ou administrateur)',
+  })
+  async deletePost(
+    @Param('postId') postId: string,
+    @CurrentUser() user: UserDocument,
+  ) {
+    return this.communityService.deletePost(postId, user._id.toString(), user.role);
   }
 
   @Get('posts')
@@ -168,29 +246,30 @@ export class CommunityController {
     return this.communityService.getComments(postId);
   }
 
-  @Get('posts/:postId/comments/flash-summary')
-  @ApiOperation({ summary: 'Résumé flash des commentaires (accessibilité)' })
-  async getCommentsFlashSummary(@Param('postId') postId: string) {
-    return this.communityService.getCommentsFlashSummary(postId);
-  }
-
-  @Get('posts/:postId/images/:imageIndex/audio-description')
+  @Delete('posts/:postId/comments/:commentId')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Description audio IA pour une image (Handicapé, Accompagnant ou Admin — JWT requis)',
+      'Supprimer un commentaire (auteur du commentaire, auteur du post, ou administrateur)',
   })
-  async getPostImageAudioDescription(
+  async deleteComment(
     @Param('postId') postId: string,
-    @Param('imageIndex', ParseIntPipe) imageIndex: number,
+    @Param('commentId') commentId: string,
     @CurrentUser() user: UserDocument,
   ) {
-    return this.communityService.getPostImageAudioDescription(
+    return this.communityService.deleteComment(
       postId,
-      imageIndex,
+      commentId,
       user._id.toString(),
+      user.role,
     );
+  }
+
+  @Get('posts/:postId/comments/flash-summary')
+  @ApiOperation({ summary: 'Résumé flash des commentaires (accessibilité)' })
+  async getCommentsFlashSummary(@Param('postId') postId: string) {
+    return this.communityService.getCommentsFlashSummary(postId);
   }
 
   @Get('posts/:id')
@@ -202,21 +281,39 @@ export class CommunityController {
   @Post('help-requests')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Créer une demande d\'aide' })
+  @ApiBody({ type: CreateHelpRequestDto })
+  @ApiOkResponse({
+    type: HelpRequest,
+    description:
+      'Document MongoDB sauvegardé : description (texte final du message builder), urgencyScore (IA sur ce texte), ' +
+      'priority, priorityScore, priorityReason, prioritySignals (HelpPriorityService), ' +
+      'plus champs inclusifs optionnels (helpType, inputMode, requesterProfile, needs*, isForAnotherPerson, presetMessageKey).',
+  })
+  @ApiOperation({
+    summary: 'Créer une demande d\'aide',
+    description:
+      'Flux : HelpRequestMessageBuilderService (description finale) → urgence IA → priorité métier (texte + métadonnées). ' +
+      'Champs inclusifs optionnels. Les clients existants peuvent n’envoyer que description + latitude + longitude.',
+  })
   async createHelpRequest(
     @CurrentUser() user: UserDocument,
-    @Body() body: { description: string; latitude: number; longitude: number },
+    @Body() body: CreateHelpRequestDto,
   ) {
-    return this.communityService.createHelpRequest(
-      user._id.toString(),
-      body.description,
-      body.latitude,
-      body.longitude,
-    );
+    return this.communityService.createHelpRequest(user._id.toString(), body);
   }
 
   @Get('help-requests')
-  @ApiOperation({ summary: 'Liste des demandes d\'aide' })
+  @ApiOkResponse({
+    type: HelpRequestsPaginatedDto,
+    description:
+      'Tri : priorité (critical > high > medium > low), puis priorityScore décroissant, puis createdAt. ' +
+      'Chaque demande inclut priority, priorityScore, priorityReason, prioritySignals lorsqu’ils sont définis.',
+  })
+  @ApiOperation({
+    summary: 'Liste des demandes d\'aide',
+    description:
+      'Pagination inchangée. Ordre : niveau de priorité, puis score numérique, puis date de création.',
+  })
   async getHelpRequests(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
