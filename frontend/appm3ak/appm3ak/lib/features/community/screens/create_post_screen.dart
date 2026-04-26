@@ -357,15 +357,20 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
       return;
     }
 
-    final locMode = kIsWeb ? 'none' : _locationMode;
-    if (locMode != 'none' && (_latitude == null || _longitude == null)) {
+    var locMode = kIsWeb ? 'none' : _locationMode;
+    final missingCoords = _latitude == null || _longitude == null;
+    if (locMode != 'none' && missingCoords) {
+      // En flux accessibilité (voix/vibrations + photo), on ne bloque pas la
+      // publication si le GPS échoue : on publie sans position.
+      locMode = 'none';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(strings.locationUnavailable),
+        const SnackBar(
+          content: Text(
+            'Position indisponible, publication envoyée sans localisation.',
+          ),
           backgroundColor: Colors.orange,
         ),
       );
-      return;
     }
 
     setState(() => _isLoading = true);
