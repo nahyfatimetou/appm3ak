@@ -97,20 +97,25 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
   DateTime _headEyesLastTtsAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _headEyesLastNoFaceTtsAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _headEyesLastFrameHandledAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime? _headEyesLastFaceSeenAt;
+  int _headEyesNoFaceStreak = 0;
   String _headEyesPendingSelectionPrompt = '';
 
   static const Duration _headEyesTtsMinGap = Duration(milliseconds: 900);
-  static const Duration _headEyesNoFaceTtsMinGap = Duration(milliseconds: 3500);
-  static const Duration _headEyesFrameThrottle = Duration(milliseconds: 120);
+  static const Duration _headEyesNoFaceTtsMinGap = Duration(milliseconds: 5000);
+  static const Duration _headEyesFrameThrottle = Duration(milliseconds: 150);
+  static const int _headEyesNoFaceWarnStreak = 8;
+  static const Duration _headEyesNoFaceGrace = Duration(milliseconds: 1800);
   static const Duration _headEyesNavCooldown = Duration(milliseconds: 750);
   static const Duration _headEyesEyeHoldConfirm = Duration(milliseconds: 1000);
   static const Duration _headEyesStillnessConfirm = Duration(milliseconds: 2200);
   static const Duration _headEyesGestureConfirmCooldown = Duration(milliseconds: 1400);
-  static const double _headEyesYawNext = 15;
-  static const double _headEyesYawPrev = -15;
-  static const double _headEyesYawNeutral = 9;
+  static const double _headEyesYawNext = 12;
+  static const double _headEyesYawPrev = -12;
+  static const double _headEyesYawNeutral = 11;
   static const double _headEyesEyeClosedMax = 0.40;
   static const double _headEyesEyeOpenMin = 0.48;
+  static const double _headEyesMinFaceCoverage = 0.015;
 
   static const List<String> _headEyesOptionLabels = <String>[
     'Poster photo (voix)',
@@ -124,7 +129,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
   /// Annonce vocale (sans émoji) — alignée sur la carte d’accueil.
   static const String _introTtsText =
-      'Assistant posts activé. Utilisez Volume plus pour parler ou la caméra pour naviguer.';
+      'Touchez la grande zone pour utiliser tête et yeux. Appuyez sur Volume plus pour dicter.';
   /// Seuil pour l’assistant d’entrée uniquement. À 0.85, presque aucune requête
   /// n’atteignait la navigation auto (confiance souvent 0.32–0.75 selon l’API).
   /// Seuil plus bas que le défaut serveur : l’entrée communautaire doit souvent
@@ -1021,6 +1026,13 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     await _handleVolumeShortcut();
   }
 
+  Future<void> _onTapLargeHeadEyesZone() async {
+    HapticFeedback.mediumImpact();
+    await _speakDictationGuidance('Mode tête et yeux activé.');
+    if (!mounted) return;
+    await _startHeadEyesCameraMode();
+  }
+
   void _openKeyboardInput() {
     _lastInputModeHint = _InputModeHint.keyboard;
     setState(() => _showKeyboardFallback = true);
@@ -1220,6 +1232,8 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       _headEyesEyesWereOpen = false;
       _headEyesEyeClosedSince = null;
       _headEyesNeutralStillSince = null;
+      _headEyesLastFaceSeenAt = null;
+      _headEyesNoFaceStreak = 0;
       _headEyesLiveHint = 'Initialisation de la caméra…';
     });
 
@@ -1244,7 +1258,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         performanceMode: FaceDetectorMode.fast,
         enableClassification: true,
         enableTracking: true,
-        minFaceSize: 0.08,
+        minFaceSize: 0.03,
       ),
     );
 
@@ -1268,7 +1282,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
       var controller = CameraController(
         front,
-        ResolutionPreset.low,
+        ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup:
             Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.nv21,
@@ -1279,7 +1293,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         await controller.dispose();
         controller = CameraController(
           front,
-          ResolutionPreset.low,
+          ResolutionPreset.medium,
           enableAudio: false,
           imageFormatGroup: ImageFormatGroup.yuv420,
         );
@@ -1294,7 +1308,8 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       setState(() {
         _headEyesCamera = controller;
         _headEyesInitializing = false;
-        _headEyesLiveHint = 'Visage détecté : tournez la tête ou fermez les yeux pour valider.';
+        _headEyesLiveHint =
+            'Placez votre visage au centre. Tournez la tête ou fermez les yeux pour valider.';
       });
 
       try {
@@ -1391,7 +1406,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         if (_headEyesConfirmProgress > 0 && mounted) {
           setState(() => _headEyesConfirmProgress = 0);
         }
-      } else if (minEye <= _headEyesEyeClosedMax && _headEyesEyesWereOpen) {
+      } else if (minEye <= _headEyesEyeClosedMax) {
         eyesClosedTracking = true;
         _headEyesEyeClosedSince ??= now;
         _headEyesNeutralStillSince = null;
@@ -1546,6 +1561,30 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     }
   }
 
+  Face _pickLargestFace(List<Face> faces) {
+    if (faces.length == 1) return faces.first;
+    Face best = faces.first;
+    var bestArea =
+        best.boundingBox.width.abs() * best.boundingBox.height.abs();
+    for (final face in faces.skip(1)) {
+      final area = face.boundingBox.width.abs() * face.boundingBox.height.abs();
+      if (area > bestArea) {
+        best = face;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+
+  bool _faceCoverageTooSmall(Face face, CameraImage image) {
+    final imageArea = (image.width * image.height).toDouble();
+    if (imageArea <= 0) return false;
+    final faceArea =
+        face.boundingBox.width.abs() * face.boundingBox.height.abs();
+    final coverage = faceArea / imageArea;
+    return coverage < _headEyesMinFaceCoverage;
+  }
+
   Future<void> _onHeadEyesCameraImage(CameraImage image) async {
     if (_headEyesProcessingFrame ||
         !_headEyesModeActive ||
@@ -1566,9 +1605,19 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       if (input == null) return;
       final faces = await _headEyesFaceDetector!.processImage(input);
       if (!mounted || faces.isEmpty) {
-        _setHeadEyesLiveHint('Pas de visage — facez la caméra.');
+        _headEyesNoFaceStreak += 1;
+        final nowNoFace = DateTime.now();
+        final recentFaceSeen = _headEyesLastFaceSeenAt != null &&
+            nowNoFace.difference(_headEyesLastFaceSeenAt!) <= _headEyesNoFaceGrace;
+        final shouldWarn = !recentFaceSeen &&
+            _headEyesNoFaceStreak >= _headEyesNoFaceWarnStreak;
+        if (shouldWarn) {
+          _setHeadEyesLiveHint('Pas de visage — rapprochez le téléphone et centrez le visage.');
+        }
         final ttsNow = DateTime.now();
-        if (ttsNow.difference(_headEyesLastNoFaceTtsAt) >= _headEyesNoFaceTtsMinGap) {
+        if (shouldWarn &&
+            ttsNow.difference(_headEyesLastNoFaceTtsAt) >=
+                _headEyesNoFaceTtsMinGap) {
           _headEyesLastNoFaceTtsAt = ttsNow;
           unawaited(
             _speakHeadEyes(
@@ -1579,63 +1628,107 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         }
         return;
       }
+      final targetFace = _pickLargestFace(faces);
+      if (_faceCoverageTooSmall(targetFace, image)) {
+        _headEyesNoFaceStreak += 1;
+        _setHeadEyesLiveHint(
+          'Visage trop loin — rapprochez le téléphone ou votre visage.',
+        );
+        return;
+      }
+      _headEyesLastFaceSeenAt = DateTime.now();
+      _headEyesNoFaceStreak = 0;
       _setHeadEyesLiveHint('');
-      _handleHeadEyesFace(faces.first);
+      _handleHeadEyesFace(targetFace);
     } catch (_) {
     } finally {
       _headEyesProcessingFrame = false;
     }
   }
 
-  Widget _buildHeadEyesEntryCard(ThemeData theme, ColorScheme scheme) {
+  Widget _buildLargeHeadEyesTouchZone(ThemeData theme, ColorScheme scheme) {
     return Semantics(
       button: true,
-      label: 'Utiliser tête et yeux. Naviguer sans toucher l’écran',
-      child: Material(
-        color: Colors.white.withValues(alpha: 0.92),
-        elevation: 2,
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          onTap: _isAnalyzing ? null : () => unawaited(_startHeadEyesCameraMode()),
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
-            child: Row(
-              children: [
-                Icon(Icons.face_retouching_natural, color: scheme.primary, size: 40),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Utiliser tête et yeux',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF1E1B4B),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Naviguer sans toucher l’écran',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: const Color(0xFF4338CA),
-                          height: 1.35,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Mode caméra tête / yeux — communauté',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
+      label: 'Utiliser tête et yeux. Touchez n’importe où dans la grande zone.',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _isAnalyzing ? null : () => unawaited(_onTapLargeHeadEyesZone()),
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF2563EB), Color(0xFF4F46E5), Color(0xFF7C3AED)],
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.face_retouching_natural,
+                    size: 96,
+                    color: Colors.white,
                   ),
-                ),
-                const Icon(Icons.chevron_right_rounded, color: Color(0xFF6366F1)),
-              ],
+                  const SizedBox(height: 18),
+                  Text(
+                    'UTILISER TETE & YEUX',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Touchez n’importe où pour activer',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.95),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF22C55E),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Caméra active',
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1850,7 +1943,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     );
   }
 
-  Widget _buildCompactActionRow(ThemeData theme, ColorScheme scheme) {
+  Widget _buildBottomEssentialControls(ThemeData theme, ColorScheme scheme) {
     Widget cell({
       required IconData icon,
       required String label,
@@ -1897,13 +1990,6 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
           label: 'Clavier',
           semanticsLabel: 'Saisir au clavier',
           onTap: _isAnalyzing ? null : _openKeyboardInput,
-        ),
-        const SizedBox(width: 10),
-        cell(
-          icon: Icons.dynamic_feed_outlined,
-          label: 'Derniers posts',
-          semanticsLabel: 'Ouvrir les derniers posts',
-          onTap: _isAnalyzing ? null : _openClassicModule,
         ),
       ],
     );
@@ -2520,15 +2606,82 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
                         const SizedBox(height: 48),
                         _buildHeadEyesModePanel(theme, scheme),
                       ] else ...[
-                      const SizedBox(height: 56),
-                      Center(child: _buildHeroMicrophone(theme, scheme)),
-                              const SizedBox(height: 20),
+                      const SizedBox(height: 20),
                       if (!kIsWeb) ...[
-                        _buildHeadEyesEntryCard(theme, scheme),
+                        SizedBox(
+                          height: math.max(
+                            320,
+                            math.min(
+                              constraints.maxHeight * 0.66,
+                              560,
+                            ),
+                          ),
+                          child: _buildLargeHeadEyesTouchZone(theme, scheme),
+                        ),
+                        const SizedBox(height: 16),
+                      ] else ...[
+                        Center(child: _buildHeroMicrophone(theme, scheme)),
                         const SizedBox(height: 16),
                       ],
-                      _buildCompactActionRow(theme, scheme),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.28),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                _isListeningUi
+                                    ? Icons.graphic_eq_rounded
+                                    : Icons.record_voice_over_outlined,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _assistantDynamicText,
+                                style: theme.textTheme.labelLarge?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _buildBottomEssentialControls(theme, scheme),
                       const SizedBox(height: 14),
+                      Center(
+                        child: Semantics(
+                          button: true,
+                          label: 'Mode classique communauté',
+                          child: TextButton.icon(
+                            onPressed: _openClassicModule,
+                            icon: const Icon(
+                              Icons.view_compact_alt_outlined,
+                              color: Colors.white,
+                            ),
+                            label: Text(
+                              'Mode classique',
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       Semantics(
                         liveRegion: true,
                         label: 'État du raccourci volume',
@@ -2663,18 +2816,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      Center(
-                        child: Semantics(
-                          button: true,
-                          label: 'Ouvrir le module classique de la communauté',
-                          child: TextButton(
-                            onPressed: _openClassicModule,
-                            child: const Text('Ouvrir le module classique'),
-                          ),
-                        ),
-                      ),
-                      SizedBox(height: constraints.maxHeight > 640 ? 28 : 14),
+                      SizedBox(height: constraints.maxHeight > 640 ? 24 : 12),
                       ],
                     ],
                   ),

@@ -46,6 +46,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   bool _isSubmittingComment = false;
   bool _speechReady = false;
   bool _isCommentListening = false;
+  bool _commentDictationStarted = false;
   String _commentLocaleId = 'fr_FR';
   List<CommentModel> _ttsCommentsContext = const [];
   int _ttsCommentIndex = -1;
@@ -244,7 +245,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     }
     await _ensureCommentSpeechReady();
     if (!_speechReady || !mounted) return;
-    setState(() => _isCommentListening = true);
+    setState(() {
+      _isCommentListening = true;
+      _commentDictationStarted = true;
+    });
+    await _speakDescription('Dictée du commentaire démarrée. Parlez maintenant.');
     try {
       await _commentSpeech.listen(
         localeId: _commentLocaleId,
@@ -267,6 +272,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           if (r.finalResult) {
             ScaffoldMessenger.maybeOf(context)?.showSnackBar(
               const SnackBar(content: Text('Votre commentaire vocal est prêt.')),
+            );
+            unawaited(
+              _speakDescription(
+                'Commentaire prêt. Vous pouvez publier ou réessayer.',
+              ),
             );
           }
         },
@@ -337,6 +347,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       const SnackBar(content: Text('Lecture des commentaires commencée.')),
     );
     await _speakDescription(text);
+    await _speakDescription(
+      'Lecture des commentaires terminée. '
+      'Voulez-vous commenter par voix ? Touchez la grande zone en bas de l’écran.',
+    );
   }
 
   Future<void> _readPreviousComment() async {
@@ -1220,36 +1234,76 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           textInputAction: TextInputAction.send,
                           onSubmitted: (_) => _submitComment(),
                         ),
+                        const SizedBox(height: 10),
+                        Semantics(
+                          button: true,
+                          label:
+                              'Commenter avec la voix. Touchez ici pour dicter votre commentaire.',
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _isSubmittingComment
+                                ? null
+                                : () => _toggleCommentVoiceInput(),
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: _isCommentListening
+                                      ? const [Color(0xFF0EA5E9), Color(0xFF1D4ED8)]
+                                      : const [Color(0xFF6366F1), Color(0xFF7C3AED)],
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 16,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      _isCommentListening ? Icons.stop : Icons.mic,
+                                      color: Colors.white,
+                                      size: 28,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _isCommentListening
+                                                ? 'Arrêter la dictée vocale'
+                                                : 'Commenter avec la voix',
+                                            style: theme.textTheme.titleMedium?.copyWith(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            _isCommentListening
+                                                ? 'Écoute en cours... touchez pour arrêter'
+                                                : 'Touchez ici pour dicter votre commentaire',
+                                            style: theme.textTheme.bodyMedium?.copyWith(
+                                              color: Colors.white.withValues(alpha: 0.95),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                         const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
                           alignment: WrapAlignment.end,
                           children: [
-                            FilledButton.tonalIcon(
-                              onPressed:
-                                  _isSubmittingComment ? null : _toggleCommentVoiceInput,
-                              icon: Icon(
-                                _isCommentListening ? Icons.stop : Icons.mic,
-                              ),
-                              label: Text(
-                                _isCommentListening
-                                    ? 'Arrêter la voix'
-                                    : 'Commenter avec la voix',
-                              ),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed:
-                                  _isSubmittingComment ? null : _retryCommentVoiceInput,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Réessayer'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed:
-                                  _isSubmittingComment ? null : _cancelCommentVoiceInput,
-                              icon: const Icon(Icons.close),
-                              label: const Text('Annuler'),
-                            ),
                             FilledButton.icon(
                               onPressed: _isSubmittingComment ? null : _submitComment,
                               icon: _isSubmittingComment
@@ -1261,6 +1315,18 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                     )
                                   : const Icon(Icons.send),
                               label: const Text('Publier'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _retryCommentVoiceInput,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Réessayer'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed:
+                                  _isSubmittingComment ? null : _cancelCommentVoiceInput,
+                              icon: const Icon(Icons.close),
+                              label: const Text('Annuler'),
                             ),
                           ],
                         ),
