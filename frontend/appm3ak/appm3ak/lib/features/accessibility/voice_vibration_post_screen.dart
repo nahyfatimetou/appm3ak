@@ -62,6 +62,9 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
   static const int _maxImages = 10;
   bool _photoChoiceActive = false;
   bool _returnHandoffOnPublish = false;
+  double? _draftLatitude;
+  double? _draftLongitude;
+  String? _draftLocationSharingMode;
 
   final FlutterTts _tts = FlutterTts();
   /// File d’attente TTS : une phrase après l’autre, sans chevauchement.
@@ -75,6 +78,7 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
       'Ouverture du mode tête et yeux pour ajouter une photo.';
   static const String _ttsPhotoAdded =
       'Photo ajoutée. Vous pouvez ajouter un texte avec Volume plus ou publier.';
+  static const String _ttsLocationAdded = 'Localisation ajoutée.';
   static const String _ttsDictationStarted =
       'Dictée démarrée. Parlez maintenant.';
   static const String _ttsDictationStopped =
@@ -158,6 +162,8 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
     _lastPhotoGuidanceCount = _extraImages.length;
     unawaited(_speakGuidance(_ttsPhotoAdded, dedupeKey: 'photo_$_lastPhotoGuidanceCount'));
   }
+
+  bool get _hasDraftLocation => _draftLatitude != null && _draftLongitude != null;
 
   Future<void> _replayCurrentGuidance() async {
     if (kIsWeb) return;
@@ -400,6 +406,9 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
       suggestedPostType: PostType.autre,
       // Si l'écran est autonome, on force la publication via CreatePost.
       autoPublish: !_returnHandoffOnPublish,
+      latitude: _draftLatitude,
+      longitude: _draftLongitude,
+      locationSharingMode: _draftLocationSharingMode,
     );
     if (_returnHandoffOnPublish) {
       context.pop(handoff);
@@ -460,10 +469,18 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
         if (_extraImages.length >= _maxImages) break;
         _extraImages.add(img);
       }
-      _status = _extraImages.isNotEmpty
-          ? 'Photo ajoutée. Vous pouvez maintenant dicter un texte puis publier.'
-          : _status;
+      _draftLatitude = handoff.latitude;
+      _draftLongitude = handoff.longitude;
+      _draftLocationSharingMode = handoff.locationSharingMode;
+      if (_extraImages.isNotEmpty && _hasDraftLocation) {
+        _status = 'Photo ajoutée. Localisation ajoutée. Vous pouvez dicter puis publier.';
+      } else if (_extraImages.isNotEmpty) {
+        _status = 'Photo ajoutée. Vous pouvez maintenant dicter un texte puis publier.';
+      }
     });
+    if (_hasDraftLocation) {
+      unawaited(_speakGuidance(_ttsLocationAdded, force: true));
+    }
     _maybeAnnouncePhotoAdded();
   }
 
@@ -686,7 +703,9 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Touchez pour tête et yeux ou une autre photo.',
+                          _hasDraftLocation
+                              ? 'Localisation ajoutée. Touchez pour tête et yeux ou une autre photo.'
+                              : 'Touchez pour tête et yeux ou une autre photo.',
                           style: theme.textTheme.bodyLarge?.copyWith(
                             fontWeight: FontWeight.w600,
                             height: 1.25,

@@ -19,6 +19,8 @@ import {
 import { POST_TYPE_VALUES } from '../enums/post-type.enum';
 
 const DANGER_LEVELS = ['none', 'low', 'medium', 'critical'] as const;
+const STREAM_TYPES = ['post', 'live', 'replay'] as const;
+const LIVE_STATUSES = ['active', 'ended'] as const;
 
 function parseOptionalBool(value: unknown): boolean | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -125,4 +127,42 @@ export class CreatePostDto {
   @IsString()
   @IsIn([...POST_LOCATION_SHARING_MODE_VALUES])
   locationSharingMode?: string;
+
+  @ApiPropertyOptional({
+    description: 'Type de flux du post',
+    enum: STREAM_TYPES,
+    default: 'post',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn([...STREAM_TYPES])
+  streamType?: string;
+
+  @ApiPropertyOptional({ description: 'Session live active', default: false })
+  @IsOptional()
+  @Transform(({ value }) => parseOptionalBool(value))
+  @IsBoolean()
+  isLive?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Statut du live',
+    enum: LIVE_STATUSES,
+    default: 'ended',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn([...LIVE_STATUSES])
+  liveStatus?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre de spectateurs', default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  viewersCount?: number;
+
+  @ApiPropertyOptional({ description: 'URL vidéo live/replay (optionnel)' })
+  @IsOptional()
+  @IsString()
+  liveVideoUrl?: string;
 }

@@ -9,6 +9,9 @@ class AccessibilityPostHandoff {
     this.images = const [],
     this.suggestedPostType,
     this.autoPublish = false,
+    this.latitude,
+    this.longitude,
+    this.locationSharingMode,
   });
 
   final String content;
@@ -18,4 +21,11 @@ class AccessibilityPostHandoff {
   /// Si vrai, [CreatePostScreen] envoie le post sans toucher au bouton Publier
   /// (indispensable pour handicap moteur lourd).
   final bool autoPublish;
+
+  /// Localisation optionnelle récupérée dans un flux accessibilité (tête/yeux).
+  final double? latitude;
+  final double? longitude;
+
+  /// `precise` ou `approximate` quand une position est jointe.
+  final String? locationSharingMode;
 }

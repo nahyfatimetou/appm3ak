@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../core/location/current_position.dart';
 import '../../data/models/post_model.dart';
 import 'accessibility_post_handoff.dart';
 import 'canned_post_phrases.dart';
@@ -26,7 +27,15 @@ class HeadGesturePostScreen extends StatefulWidget {
   State<HeadGesturePostScreen> createState() => _HeadGesturePostScreenState();
 }
 
-enum _Step { scanning, aimingRear, captured, menu, finalConfirm, success }
+enum _Step {
+  scanning,
+  aimingRear,
+  captured,
+  menu,
+  finalConfirm,
+  locationConfirm,
+  success,
+}
 
 class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
   CameraController? _rear;
@@ -67,6 +76,14 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
   static const double _eyeClosedMax = 0.40;
   static const double _eyeOpenMin = 0.48;
   bool _returnHandoffOnPublish = false;
+  double? _draftLatitude;
+  double? _draftLongitude;
+  String? _draftLocationSharingMode;
+  bool _locationDecisionInProgress = false;
+  DateTime _lastLocationDecisionAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _locationDecisionCooldown = Duration(milliseconds: 1400);
+  static const Duration _locationYesHoldMin = Duration(milliseconds: 1000);
+  static const double _locationNoYawLeft = -16;
 
   @override
   void initState() {
@@ -420,6 +437,10 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
 
       _faceDetected = true;
       _throttledDebug(y, z, left, right, faceDetected: true);
+      if (_step == _Step.locationConfirm) {
+        _handleLocationConfirm(y, left, right);
+        return;
+      }
       _handleDwellSelection(y, z);
       _handleBlink(left, right);
     } catch (_) {
@@ -548,17 +569,93 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
         return;
       case _Step.finalConfirm:
         if (_selectedIndex < 0) return;
-        setState(() => _step = _Step.success);
-        unawaited(_speak('Publié.'));
-        Future<void>.delayed(const Duration(milliseconds: 650), () {
-          if (!mounted) return;
-          _finishWithHandoff();
+        setState(() {
+          _step = _Step.locationConfirm;
+          _locationDecisionInProgress = false;
         });
+        _eyeClosedSince = null;
+        _eyesWereOpen = false;
+        unawaited(
+          _speak(
+            'Photo ajoutée. Voulez-vous joindre votre localisation ? '
+            'Fermez les yeux pour oui. Tournez la tête à gauche pour non.',
+          ),
+        );
         return;
       case _Step.menu:
+      case _Step.locationConfirm:
       case _Step.success:
         return;
     }
+  }
+
+  Future<void> _resolveLocationDecision({required bool attach}) async {
+    if (_locationDecisionInProgress) return;
+    final now = DateTime.now();
+    if (now.difference(_lastLocationDecisionAt) < _locationDecisionCooldown) {
+      return;
+    }
+    _lastLocationDecisionAt = now;
+    _locationDecisionInProgress = true;
+
+    if (!attach) {
+      _draftLatitude = null;
+      _draftLongitude = null;
+      _draftLocationSharingMode = null;
+      await _speak('Localisation ignorée.');
+      if (!mounted) return;
+      setState(() => _step = _Step.success);
+      Future<void>.delayed(const Duration(milliseconds: 500), () {
+        if (!mounted) return;
+        _finishWithHandoff();
+      });
+      return;
+    }
+
+    final pos = await getCurrentPositionForPostOrNull();
+    if (!mounted) return;
+    if (pos == null) {
+      _draftLatitude = null;
+      _draftLongitude = null;
+      _draftLocationSharingMode = null;
+      await _speak(
+        'Localisation non disponible. Vous pouvez continuer sans localisation.',
+      );
+    } else {
+      _draftLatitude = pos.latitude;
+      _draftLongitude = pos.longitude;
+      _draftLocationSharingMode = 'precise';
+      await _speak('Localisation ajoutée.');
+    }
+    if (!mounted) return;
+    setState(() => _step = _Step.success);
+    Future<void>.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      _finishWithHandoff();
+    });
+  }
+
+  void _handleLocationConfirm(double? y, double? left, double? right) {
+    if (_step != _Step.locationConfirm || _locationDecisionInProgress) return;
+
+    if (y != null && y <= _locationNoYawLeft) {
+      unawaited(_resolveLocationDecision(attach: false));
+      return;
+    }
+
+    if (left == null || right == null) return;
+    final minEye = math.min(left, right);
+    final now = DateTime.now();
+    if (minEye >= _eyeOpenMin) {
+      _eyesWereOpen = true;
+      _eyeClosedSince = null;
+      return;
+    }
+    if (minEye > _eyeClosedMax) return;
+    _eyeClosedSince ??= now;
+    final held = now.difference(_eyeClosedSince!);
+    if (held < _locationYesHoldMin) return;
+    unawaited(_resolveLocationDecision(attach: true));
   }
 
   Future<void> _captureRearPhoto() async {
@@ -603,6 +700,9 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
       images: List<XFile>.from(_shots),
       suggestedPostType: PostType.handicapMoteur,
       autoPublish: !_returnHandoffOnPublish,
+      latitude: _draftLatitude,
+      longitude: _draftLongitude,
+      locationSharingMode: _draftLocationSharingMode,
     );
     if (_returnHandoffOnPublish) {
       context.pop(handoff);
@@ -918,6 +1018,44 @@ class _HeadGesturePostScreenState extends State<HeadGesturePostScreen> {
                                           color: const Color(0xFFBFDBFE),
                                           fontWeight: FontWeight.w900,
                                           letterSpacing: 1.0,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (_step == _Step.locationConfirm)
+                            Positioned.fill(
+                              child: Container(
+                                color: Colors.black.withValues(alpha: 0.72),
+                                padding: const EdgeInsets.all(20),
+                                child: Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.location_on_outlined,
+                                        color: Colors.white,
+                                        size: 64,
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Joindre la localisation ?',
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.headlineSmall?.copyWith(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Fermez les yeux pour OUI\nTournez la tête à gauche pour NON',
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.titleMedium?.copyWith(
+                                          color: Colors.white70,
+                                          fontWeight: FontWeight.w700,
+                                          height: 1.35,
                                         ),
                                       ),
                                     ],

@@ -582,8 +582,20 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
         if (_images.length >= _maxImages) break;
         _images.add(x);
       }
+      final mode = handoff.locationSharingMode?.trim();
+      if (handoff.latitude != null && handoff.longitude != null) {
+        _latitude = handoff.latitude;
+        _longitude = handoff.longitude;
+        if (mode == 'approximate' || mode == 'precise') {
+          _locationMode = mode!;
+        } else {
+          _locationMode = 'precise';
+        }
+      }
     });
-    if (!kIsWeb && handoff.images.isNotEmpty) {
+    if (!kIsWeb &&
+        handoff.images.isNotEmpty &&
+        !(handoff.latitude != null && handoff.longitude != null)) {
       await _ensurePreciseGpsAfterPhotoCapture();
     }
     if (shouldPublish) {

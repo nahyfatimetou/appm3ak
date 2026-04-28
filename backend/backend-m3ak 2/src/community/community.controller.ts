@@ -94,6 +94,19 @@ export class CommunityController {
           enum: ['none', 'low', 'medium', 'critical'],
           description: 'Si critical + coords → alerte SOS zone Aide',
         },
+        streamType: {
+          type: 'string',
+          enum: ['post', 'live', 'replay'],
+          default: 'post',
+        },
+        isLive: { type: 'boolean', default: false },
+        liveStatus: {
+          type: 'string',
+          enum: ['active', 'ended'],
+          default: 'ended',
+        },
+        viewersCount: { type: 'number', default: 0, minimum: 0 },
+        liveVideoUrl: { type: 'string' },
         images: {
           type: 'array',
           items: { type: 'string', format: 'binary' },
@@ -128,6 +141,11 @@ export class CommunityController {
         needsPhysicalAssistance: body.needsPhysicalAssistance,
         needsSimpleLanguage: body.needsSimpleLanguage,
         locationSharingMode: body.locationSharingMode,
+        streamType: body.streamType,
+        isLive: body.isLive,
+        liveStatus: body.liveStatus,
+        viewersCount: body.viewersCount,
+        liveVideoUrl: body.liveVideoUrl,
       },
     );
   }

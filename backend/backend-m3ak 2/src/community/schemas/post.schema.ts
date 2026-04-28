@@ -18,6 +18,47 @@ export class Post {
   @Prop({ type: String, required: true })
   type: string;
 
+  @ApiProperty({
+    description: 'Type de flux communautaire',
+    required: false,
+    enum: ['post', 'live', 'replay'],
+    default: 'post',
+  })
+  @Prop({ type: String, enum: ['post', 'live', 'replay'], default: 'post' })
+  streamType: string;
+
+  @ApiProperty({
+    description: 'Indique si le post représente une session live',
+    required: false,
+    default: false,
+  })
+  @Prop({ type: Boolean, default: false })
+  isLive: boolean;
+
+  @ApiProperty({
+    description: 'Statut live (active/ended)',
+    required: false,
+    enum: ['active', 'ended'],
+    default: 'ended',
+  })
+  @Prop({ type: String, enum: ['active', 'ended'], default: 'ended' })
+  liveStatus: string;
+
+  @ApiProperty({
+    description: 'Nombre de spectateurs live',
+    required: false,
+    default: 0,
+  })
+  @Prop({ type: Number, default: 0, min: 0 })
+  viewersCount: number;
+
+  @ApiProperty({
+    description: 'URL vidéo live/replay (MVP optionnel)',
+    required: false,
+  })
+  @Prop({ type: String, default: null })
+  liveVideoUrl?: string | null;
+
   @ApiProperty({ description: 'Chemins des images (dossier uploads/)', type: [String] })
   @Prop({ type: [String], default: [] })
   images: string[];

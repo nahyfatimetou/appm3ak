@@ -27,6 +27,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
     this.autoReadPost = false,
     this.autoReadComments = false,
     this.autoReadSummary = false,
+    this.audioSelectionMode,
     super.key,
   });
 
@@ -34,6 +35,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
   final bool autoReadPost;
   final bool autoReadComments;
   final bool autoReadSummary;
+  final String? audioSelectionMode;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -85,9 +87,41 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   Future<void> _runRouteAutoActions(PostModel post) async {
     final dedup =
-        '${post.id}|${widget.autoReadPost}|${widget.autoReadComments}|${widget.autoReadSummary}';
+        '${post.id}|${widget.autoReadPost}|${widget.autoReadComments}|${widget.autoReadSummary}|${widget.audioSelectionMode ?? ''}';
     if (_autoActionDedupKey == dedup) return;
     _autoActionDedupKey = dedup;
+    if (widget.audioSelectionMode == 'readPost') {
+      final imageCount = post.images?.length ?? 0;
+      final imageInfo = imageCount > 0
+          ? 'Ce post contient $imageCount image${imageCount > 1 ? 's' : ''}.'
+          : 'Ce post ne contient pas d image.';
+      await _speakDescription('${_ttsReadableForPost(post)} $imageInfo');
+      await _speakDescription('Voulez-vous commenter avec la voix ?');
+      return;
+    }
+    if (widget.audioSelectionMode == 'readComments') {
+      final comments = await ref.read(postCommentsProvider(widget.postId).future);
+      if (comments.isEmpty) {
+        await _speakDescription('Aucun commentaire');
+        await _speakDescription('Voulez-vous commenter avec la voix ?');
+        return;
+      }
+      final text = comments
+          .asMap()
+          .entries
+          .map((e) => _commentReadableLine(e.value, e.key, comments.length))
+          .join(' ');
+      await _speakDescription(text);
+      await _speakDescription('Voulez-vous commenter avec la voix ?');
+      return;
+    }
+    if (widget.audioSelectionMode == 'voiceComment') {
+      await _speakDescription('Vous pouvez commenter avec votre voix');
+      if (!_isCommentListening) {
+        await _toggleCommentVoiceInput();
+      }
+      return;
+    }
     if (widget.autoReadPost) {
       await _speakDescription(_ttsReadableForPost(post));
     }
@@ -649,7 +683,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           }
           if ((widget.autoReadPost ||
                   widget.autoReadComments ||
-                  widget.autoReadSummary) &&
+                  widget.autoReadSummary ||
+                  widget.audioSelectionMode != null) &&
               _autoActionDedupKey == null) {
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               if (!mounted) return;

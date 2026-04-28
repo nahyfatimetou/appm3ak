@@ -9,6 +9,7 @@ import '../features/auth/screens/login_screen.dart';
 import '../features/community/screens/community_contacts_route_screen.dart';
 import '../features/community/screens/community_ai_entry_screen.dart';
 import '../features/community/screens/community_locations_screen.dart';
+import '../features/community/screens/community_live_screen.dart';
 import '../features/community/screens/community_main_screen.dart';
 import '../features/community/screens/community_nearby_places_screen.dart';
 import '../features/community/screens/create_help_request_screen.dart';
@@ -180,6 +181,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, _) => const CommunityMainScreen(initialTabIndex: 1),
       ),
       GoRoute(
+        path: '/community-live',
+        builder: (_, state) {
+          final q = state.uri.queryParameters;
+          final postId = q['postId'];
+          final isHost = q['host'] == '1';
+          return CommunityLiveScreen(postId: postId, isHost: isHost);
+        },
+      ),
+      GoRoute(
         path: '/create-post',
         builder: (_, state) {
           final extra = state.extra;
@@ -222,11 +232,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           final autoReadPost = q['autoReadPost'] == '1';
           final autoReadComments = q['autoReadComments'] == '1';
           final autoReadSummary = q['autoReadSummary'] == '1';
+          final mode = q['mode'];
+          final audioSelectionMode =
+              (mode == 'readPost' || mode == 'readComments' || mode == 'voiceComment')
+              ? mode
+              : null;
           return PostDetailScreen(
             postId: id,
             autoReadPost: autoReadPost,
             autoReadComments: autoReadComments,
             autoReadSummary: autoReadSummary,
+            audioSelectionMode: audioSelectionMode,
           );
         },
       ),

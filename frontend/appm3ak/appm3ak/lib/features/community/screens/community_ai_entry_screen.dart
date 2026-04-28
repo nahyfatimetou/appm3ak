@@ -119,9 +119,10 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
   static const List<String> _headEyesOptionLabels = <String>[
     'Poster photo (voix)',
-    'Lire dernier post',
-    'Supprimer mon dernier post',
-    'Lire commentaires dernier post',
+    'Lancer un live',
+    'Lire les posts',
+    'Lire commentaires',
+    'Commenter avec la voix',
   ];
 
   static const String _headEyesIntroTts =
@@ -380,6 +381,46 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
             t.contains('dernier poste') ||
             t.contains('derenier poste') ||
             t.contains('akher post'));
+  }
+
+  bool _isReadPostsAudioRequest(String raw) {
+    final t = _normalizeSpeechText(raw);
+    final hasReadVerb = t.contains('lire') || t.contains('ecouter');
+    final hasPosts = t.contains('post') || t.contains('posts') || t.contains('publication');
+    return hasReadVerb && hasPosts && !t.contains('commentaire');
+  }
+
+  bool _isReadCommentsAudioRequest(String raw) {
+    final t = _normalizeSpeechText(raw);
+    final hasReadVerb = t.contains('lire') || t.contains('ecouter');
+    final hasComments = t.contains('commentaire') || t.contains('commentaires');
+    return hasReadVerb && hasComments;
+  }
+
+  bool _isVoiceCommentRequest(String raw) {
+    final t = _normalizeSpeechText(raw);
+    return (t.contains('commenter') || t.contains('commentaire')) &&
+        (t.contains('voix') || t.contains('vocal'));
+  }
+
+  bool _isLaunchLiveRequest(String raw) {
+    final t = _normalizeSpeechText(raw);
+    final hasLaunchVerb =
+        t.contains('lancer') || t.contains('demarrer') || t.contains('start');
+    final hasLiveWord = t.contains('live') || t.contains('direct');
+    return hasLaunchVerb && hasLiveWord;
+  }
+
+  bool _isReadCommentsAudioListRequest(String raw) {
+    final t = _normalizeSpeechText(raw);
+    final mentionsComments = t.contains('commentaire') || t.contains('commentaires');
+    if (!mentionsComments) return false;
+    return t.contains('lire les commentaires') ||
+        t.contains('ecouter les commentaires') ||
+        t.contains('commentaires d un post') ||
+        t.contains('commentaires d un poste') ||
+        t.contains('commentaires post') ||
+        t.contains('lire commentaire');
   }
 
   bool _isReadLatestPostSummaryRequest(String raw) {
@@ -858,6 +899,36 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     }
     if (_isOpenHeadEyesCameraCommand(typed)) {
       _navigateObstacleHeadGesture();
+      return;
+    }
+    if (_isLaunchLiveRequest(typed)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-live?host=1');
+      return;
+    }
+    if (_isVoiceCommentRequest(typed)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=voiceComment');
+      return;
+    }
+    if (_isReadCommentsAudioRequest(typed)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=readComments');
+      return;
+    }
+    if (_isReadPostsAudioRequest(typed)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=readPost');
+      return;
+    }
+    if (_isReadCommentsAudioListRequest(typed)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=readCommentsAudio');
       return;
     }
     if (_isReadLatestPostCommentsRequest(typed)) {
@@ -1493,16 +1564,20 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         context.push('/create-post-voice-vibration');
         return;
       case 1:
-        await _openLatestCommunityPost(autoReadPost: true);
+        _hasNavigatedFromAi = true;
+        context.push('/community-live?host=1');
         return;
       case 2:
-        await _deleteMyLatestCommunityPost();
+        _hasNavigatedFromAi = true;
+        context.push('/community-posts?mode=readPost');
         return;
       case 3:
-        await _openLatestCommunityPost(
-          autoReadPost: true,
-          autoReadComments: true,
-        );
+        _hasNavigatedFromAi = true;
+        context.push('/community-posts?mode=readComments');
+        return;
+      case 4:
+        _hasNavigatedFromAi = true;
+        context.push('/community-posts?mode=voiceComment');
         return;
       default:
         return;
@@ -1995,6 +2070,49 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     );
   }
 
+  Widget _buildUnifiedAudioModeButtons() {
+    Widget audioButton({
+      required IconData icon,
+      required String label,
+      required String route,
+    }) {
+      return FilledButton.tonalIcon(
+        onPressed: _isAnalyzing
+            ? null
+            : () {
+                if (!mounted || _hasNavigatedFromAi) return;
+                _hasNavigatedFromAi = true;
+                context.push(route);
+              },
+        icon: Icon(icon),
+        label: Text(label),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.center,
+      children: [
+        audioButton(
+          icon: Icons.record_voice_over_outlined,
+          label: 'Lire les posts',
+          route: '/community-posts?mode=readPost',
+        ),
+        audioButton(
+          icon: Icons.forum_outlined,
+          label: 'Lire commentaires',
+          route: '/community-posts?mode=readComments',
+        ),
+        audioButton(
+          icon: Icons.mic_none_rounded,
+          label: 'Commenter avec la voix',
+          route: '/community-posts?mode=voiceComment',
+        ),
+      ],
+    );
+  }
+
   Widget _buildPostSuggestionChips(ThemeData theme) {
     final text = _resolveRawTextForAnalysis();
     final suggestions = _postSuggestionRoutes(text);
@@ -2198,6 +2316,36 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     }
     if (_isOpenHeadEyesCameraCommand(text)) {
       _navigateObstacleHeadGesture();
+      return;
+    }
+    if (_isLaunchLiveRequest(text)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-live?host=1');
+      return;
+    }
+    if (_isVoiceCommentRequest(text)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=voiceComment');
+      return;
+    }
+    if (_isReadCommentsAudioRequest(text)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=readComments');
+      return;
+    }
+    if (_isReadPostsAudioRequest(text)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=readPost');
+      return;
+    }
+    if (_isReadCommentsAudioListRequest(text)) {
+      if (!mounted || _hasNavigatedFromAi) return;
+      _hasNavigatedFromAi = true;
+      context.push('/community-posts?mode=readCommentsAudio');
       return;
     }
     if (_isReadLatestPostCommentsRequest(text)) {
@@ -2660,6 +2808,8 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
                       ),
                       const SizedBox(height: 12),
                       _buildBottomEssentialControls(theme, scheme),
+                      const SizedBox(height: 10),
+                      _buildUnifiedAudioModeButtons(),
                       const SizedBox(height: 14),
                       Center(
                         child: Semantics(

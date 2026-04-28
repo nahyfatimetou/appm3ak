@@ -133,9 +133,18 @@ export class CommunityService {
       needsPhysicalAssistance?: boolean;
       needsSimpleLanguage?: boolean;
       locationSharingMode?: string;
+      streamType?: string;
+      isLive?: boolean;
+      liveStatus?: string;
+      viewersCount?: number;
+      liveVideoUrl?: string;
     },
   ) {
     const dangerLevel = opts?.dangerLevel ?? 'none';
+    const streamType = opts?.streamType ?? 'post';
+    const isLive = opts?.isLive ?? streamType === 'live';
+    const liveStatus = opts?.liveStatus ?? (isLive ? 'active' : 'ended');
+    const viewersCount = Math.max(0, opts?.viewersCount ?? 0);
 
     let useLat = opts?.latitude;
     let useLng = opts?.longitude;
@@ -211,6 +220,11 @@ export class CommunityService {
       needsPhysicalAssistance: opts?.needsPhysicalAssistance ?? null,
       needsSimpleLanguage: opts?.needsSimpleLanguage ?? null,
       locationSharingMode: opts?.locationSharingMode ?? null,
+      streamType,
+      isLive,
+      liveStatus,
+      viewersCount,
+      liveVideoUrl: opts?.liveVideoUrl ?? null,
     });
 
     /** Pont Post (danger critique) → alerte SOS pour utilisateurs à proximité (API findNearby). */

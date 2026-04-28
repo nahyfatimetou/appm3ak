@@ -58,6 +58,39 @@ enum PostType {
   String toApiString() => name;
 }
 
+enum CommunityPostStreamType {
+  post,
+  live,
+  replay;
+
+  static CommunityPostStreamType fromString(String? value) {
+    final v = value?.toLowerCase().trim();
+    switch (v) {
+      case 'live':
+        return CommunityPostStreamType.live;
+      case 'replay':
+        return CommunityPostStreamType.replay;
+      default:
+        return CommunityPostStreamType.post;
+    }
+  }
+
+  String toApiString() => name;
+}
+
+enum LiveStatus {
+  active,
+  ended;
+
+  static LiveStatus fromString(String? value) {
+    return value?.toLowerCase().trim() == 'active'
+        ? LiveStatus.active
+        : LiveStatus.ended;
+  }
+
+  String toApiString() => name;
+}
+
 /// Modèle représentant un post de la communauté.
 class PostModel extends Equatable {
   const PostModel({
@@ -84,6 +117,11 @@ class PostModel extends Equatable {
     this.needsPhysicalAssistance,
     this.needsSimpleLanguage,
     this.locationSharingMode,
+    this.streamType = CommunityPostStreamType.post,
+    this.isLive = false,
+    this.liveStatus = LiveStatus.ended,
+    this.viewersCount = 0,
+    this.liveVideoUrl,
   });
 
   factory PostModel.fromJson(Map<String, dynamic> json) {
@@ -132,6 +170,24 @@ class PostModel extends Equatable {
       needsPhysicalAssistance: _parseBool(json['needsPhysicalAssistance']),
       needsSimpleLanguage: _parseBool(json['needsSimpleLanguage']),
       locationSharingMode: json['locationSharingMode']?.toString(),
+      streamType: CommunityPostStreamType.fromString(
+        json['postStreamType']?.toString() ??
+            json['postType']?.toString() ??
+            json['postNature']?.toString() ??
+            (json['type']?.toString() == 'live' ||
+                    json['type']?.toString() == 'replay' ||
+                    json['type']?.toString() == 'post'
+                ? json['type']?.toString()
+                : null),
+      ),
+      isLive: _parseBool(json['isLive']) ??
+          (CommunityPostStreamType.fromString(
+                json['postStreamType']?.toString() ?? json['postType']?.toString(),
+              ) ==
+              CommunityPostStreamType.live),
+      liveStatus: LiveStatus.fromString(json['liveStatus']?.toString()),
+      viewersCount: (json['viewersCount'] as num?)?.toInt() ?? 0,
+      liveVideoUrl: json['liveVideoUrl']?.toString(),
     );
   }
 
@@ -160,10 +216,20 @@ class PostModel extends Equatable {
   final bool? needsPhysicalAssistance;
   final bool? needsSimpleLanguage;
   final String? locationSharingMode;
+  final CommunityPostStreamType streamType;
+  final bool isLive;
+  final LiveStatus liveStatus;
+  final int viewersCount;
+  final String? liveVideoUrl;
 
   /// Afficher la carte de validation obstacle (lieu / obstacle signalé).
   bool get showsObstacleValidation =>
       hasPlace || obstaclePresent || (validationYes + validationNo) > 0;
+
+  bool get isActiveLive =>
+      streamType == CommunityPostStreamType.live &&
+      isLive &&
+      liveStatus == LiveStatus.active;
 
   /// Nom de l'utilisateur (si disponible).
   String get userName => user?.displayName ?? 'Utilisateur';
@@ -191,6 +257,11 @@ class PostModel extends Equatable {
         'needsPhysicalAssistance': needsPhysicalAssistance,
         'needsSimpleLanguage': needsSimpleLanguage,
         'locationSharingMode': locationSharingMode,
+        'postStreamType': streamType.toApiString(),
+        'isLive': isLive,
+        'liveStatus': liveStatus.toApiString(),
+        'viewersCount': viewersCount,
+        'liveVideoUrl': liveVideoUrl,
       };
 
   PostModel copyWith({
@@ -217,6 +288,11 @@ class PostModel extends Equatable {
     bool? needsPhysicalAssistance,
     bool? needsSimpleLanguage,
     String? locationSharingMode,
+    CommunityPostStreamType? streamType,
+    bool? isLive,
+    LiveStatus? liveStatus,
+    int? viewersCount,
+    String? liveVideoUrl,
   }) =>
       PostModel(
         id: id ?? this.id,
@@ -243,6 +319,11 @@ class PostModel extends Equatable {
             needsPhysicalAssistance ?? this.needsPhysicalAssistance,
         needsSimpleLanguage: needsSimpleLanguage ?? this.needsSimpleLanguage,
         locationSharingMode: locationSharingMode ?? this.locationSharingMode,
+        streamType: streamType ?? this.streamType,
+        isLive: isLive ?? this.isLive,
+        liveStatus: liveStatus ?? this.liveStatus,
+        viewersCount: viewersCount ?? this.viewersCount,
+        liveVideoUrl: liveVideoUrl ?? this.liveVideoUrl,
       );
 
   @override
@@ -264,6 +345,11 @@ class PostModel extends Equatable {
         needsPhysicalAssistance,
         needsSimpleLanguage,
         locationSharingMode,
+        streamType,
+        isLive,
+        liveStatus,
+        viewersCount,
+        liveVideoUrl,
       ];
 }
 

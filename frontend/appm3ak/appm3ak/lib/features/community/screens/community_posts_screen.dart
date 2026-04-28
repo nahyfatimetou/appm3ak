@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/l10n/app_strings.dart';
@@ -31,6 +34,121 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
   /// Filtre backend selon `role` + `typeHandicap` (endpoint `GET /community/posts/for-me`).
   bool _smartProfileFilter = false;
   bool _filtersExpanded = false;
+  final FlutterTts _audioTts = FlutterTts();
+  String? _audioMode;
+  bool _audioPaused = false;
+  bool _audioStopRequested = false;
+  bool _audioStartedForCurrentList = false;
+  int _currentAudioSelectedPost = -1;
+  List<PostModel> _audioPosts = const [];
+  Timer? _audioNextTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAudioTts();
+  }
+
+  Future<void> _initAudioTts() async {
+    await _audioTts.awaitSpeakCompletion(true);
+    await _audioTts.setLanguage('fr-FR');
+    await _audioTts.setSpeechRate(0.45);
+    await _audioTts.setPitch(1.0);
+  }
+
+  @override
+  void dispose() {
+    _audioNextTimer?.cancel();
+    _audioStopRequested = true;
+    _audioTts.stop();
+    super.dispose();
+  }
+
+  Future<void> _speakAudioModeIntro() async {
+    await _audioTts.stop();
+    await _audioTts.speak(
+      'Je vais lire les posts. Double tapez pour choisir.',
+    );
+  }
+
+  String _audioPreview(PostModel post) {
+    final content = post.contenu.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (content.isEmpty) return 'Sans description.';
+    if (content.length <= 80) return content;
+    return '${content.substring(0, 80)}.';
+  }
+
+  Future<void> _speakPostsOneByOne(List<PostModel> posts) async {
+    _audioStopRequested = false;
+    _audioPosts = List<PostModel>.from(posts);
+    _currentAudioSelectedPost = _audioPosts.isEmpty ? -1 : 0;
+    await _speakAudioModeIntro();
+    if (!mounted || _audioStopRequested) return;
+
+    for (var i = 0; i < _audioPosts.length; i++) {
+      if (!mounted || _audioStopRequested) return;
+      while (_audioPaused && mounted && !_audioStopRequested) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      if (!mounted || _audioStopRequested) return;
+      final post = _audioPosts[i];
+      setState(() => _currentAudioSelectedPost = i);
+      final author = post.userName.trim().isEmpty ? 'Utilisateur inconnu' : post.userName.trim();
+      final actionHint = _audioMode == 'voiceComment'
+          ? 'Double tapez pour commenter ce post avec la voix.'
+          : 'Double tapez pour choisir ce post.';
+      final message = 'Post ${i + 1} de $author. ${_audioPreview(post)} $actionHint';
+      await _audioTts.stop();
+      await _audioTts.speak(message);
+      if (!mounted || _audioStopRequested) return;
+      final wait = Completer<void>();
+      _audioNextTimer?.cancel();
+      _audioNextTimer = Timer(const Duration(milliseconds: 900), () {
+        if (!wait.isCompleted) wait.complete();
+      });
+      await wait.future;
+    }
+  }
+
+  Future<void> _restartAudioMode(List<PostModel> posts) async {
+    _audioNextTimer?.cancel();
+    _audioStopRequested = true;
+    await _audioTts.stop();
+    _audioStopRequested = false;
+    if (!mounted) return;
+    setState(() {
+      _audioPaused = false;
+      _audioStartedForCurrentList = true;
+    });
+    await _speakPostsOneByOne(posts);
+  }
+
+  Future<void> _quitAudioMode() async {
+    _audioNextTimer?.cancel();
+    _audioStopRequested = true;
+    await _audioTts.stop();
+    if (!mounted) return;
+    setState(() {
+      _audioMode = null;
+      _audioPaused = false;
+      _audioStartedForCurrentList = false;
+      _currentAudioSelectedPost = -1;
+      _audioPosts = const [];
+    });
+  }
+
+  void _onAudioDoubleTapSelect() {
+    if (_audioMode == null) return;
+    if (_audioPosts.isEmpty) return;
+    final idx = (_currentAudioSelectedPost < 0 || _currentAudioSelectedPost >= _audioPosts.length)
+        ? 0
+        : _currentAudioSelectedPost;
+    final post = _audioPosts[idx];
+    _audioStopRequested = true;
+    _audioNextTimer?.cancel();
+    _audioTts.stop();
+    context.push('/post-detail/${post.id}?mode=$_audioMode');
+  }
 
   Future<void> _openCreatePost(BuildContext context) async {
     // Le + doit toujours ouvrir l’écran “Créer un post” (formulaire complet).
@@ -40,6 +158,21 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final mode = GoRouterState.of(context).uri.queryParameters['mode'];
+    final normalizedMode = (mode == 'readPost' || mode == 'readComments' || mode == 'voiceComment')
+        ? mode
+        : (mode == 'readCommentsAudio' ? 'readComments' : null);
+    if (_audioMode != normalizedMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        setState(() {
+          _audioMode = normalizedMode;
+          _audioStartedForCurrentList = false;
+          _audioPaused = false;
+          _currentAudioSelectedPost = -1;
+        });
+      });
+    }
     final user = ref.watch(authStateProvider).valueOrNull;
     final currentUserId = user?.id.trim();
     final strings =
@@ -75,6 +208,11 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                   ),
                 ),
                 const Spacer(),
+                TextButton.icon(
+                  onPressed: () => context.push('/community-live?host=1'),
+                  icon: const Icon(Icons.wifi_tethering),
+                  label: const Text('Lancer un live'),
+                ),
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline),
                   onPressed: () => _openCreatePost(context),
@@ -232,7 +370,17 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                   );
                 }
 
-                return RefreshIndicator(
+                if (_audioMode != null &&
+                    filtered.isNotEmpty &&
+                    !_audioStartedForCurrentList) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    setState(() => _audioStartedForCurrentList = true);
+                    unawaited(_speakPostsOneByOne(filtered));
+                  });
+                }
+
+                final listView = RefreshIndicator(
                   onRefresh: () async {
                     ref.invalidate(communityFeedProvider((
                       page: _currentPage,
@@ -243,6 +391,29 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                   child: CustomScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     slivers: [
+                      if (_audioMode != null)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                            child: Material(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(14),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 12,
+                                ),
+                                child: Text(
+                                  'Mode audio : écoutez les posts puis double-tapez pour choisir.',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: theme.colorScheme.onPrimaryContainer,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       if (useSmart && matchedTypes.isNotEmpty)
                         SliverPadding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -269,8 +440,13 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                               isMine: hasCurrentUser &&
                                   post.userId.trim().isNotEmpty &&
                                   post.userId.trim() == currentUserId,
-                              onTap: () => context.push(
-                                '/post-detail/${post.id}',
+                              onTap: _audioMode != null
+                                  ? () {}
+                                  : () => context.push(
+                                        '/post-detail/${post.id}',
+                                      ),
+                              onJoinLive: () => context.push(
+                                '/community-live?postId=${post.id}',
                               ),
                             );
                           },
@@ -332,6 +508,54 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                     ],
                   ),
                 );
+                if (_audioMode == null) return listView;
+                final screenSize = MediaQuery.sizeOf(context);
+                return Stack(
+                  children: [
+                    listView,
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _onAudioDoubleTapSelect,
+                      ),
+                    ),
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: 12,
+                      child: Material(
+                        color: theme.colorScheme.surface.withValues(alpha: 0.95),
+                        borderRadius: BorderRadius.circular(14),
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  setState(() => _audioPaused = !_audioPaused);
+                                },
+                                icon: Icon(_audioPaused ? Icons.play_arrow : Icons.pause),
+                                label: Text(_audioPaused ? 'Reprendre' : 'Pause lecture'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: () => _restartAudioMode(filtered),
+                                icon: const Icon(Icons.replay),
+                                label: const Text('Recommencer'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _quitAudioMode,
+                                icon: const Icon(Icons.close),
+                                label: const Text('Quitter mode audio'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
               },
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (error, stack) => Center(
@@ -362,6 +586,16 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                   ],
                 ),
               ),
+            ),
+          ),
+          Positioned(
+            right: 14,
+            bottom: 14,
+            child: FloatingActionButton.extended(
+              heroTag: 'community_add_post_fab',
+              onPressed: () => _openCreatePost(context),
+              icon: const Icon(Icons.add),
+              label: const Text('Ajouter post'),
             ),
           ),
         ],
@@ -405,11 +639,13 @@ class _PostCard extends StatelessWidget {
     required this.post,
     required this.isMine,
     required this.onTap,
+    required this.onJoinLive,
   });
 
   final PostModel post;
   final bool isMine;
   final VoidCallback onTap;
+  final VoidCallback onJoinLive;
 
   @override
   Widget build(BuildContext context) {
@@ -525,6 +761,26 @@ class _PostCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (post.isActiveLive) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'LIVE',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: Colors.red.shade700,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 12),
@@ -549,6 +805,29 @@ class _PostCard extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 12),
+              if (post.isActiveLive)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.visibility_outlined, size: 18),
+                      const SizedBox(width: 6),
+                      Text('${post.viewersCount} spectateurs'),
+                      const Spacer(),
+                      FilledButton.icon(
+                        onPressed: onJoinLive,
+                        icon: const Icon(Icons.play_circle_outline),
+                        label: const Text('Rejoindre le live'),
+                      ),
+                    ],
+                  ),
+                ),
+              if (post.isActiveLive) const SizedBox(height: 2),
               // Footer : commentaires
               Row(
                 children: [
