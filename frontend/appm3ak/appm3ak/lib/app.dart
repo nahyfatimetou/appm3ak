@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/app_theme.dart';
-import 'm3ak_assist/m3ak_global_assistant_layer.dart';
 import 'providers/theme_provider.dart';
 import 'router/app_router.dart';
 
@@ -20,10 +19,6 @@ class Ma3akApp extends ConsumerWidget {
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
       routerConfig: router,
-      builder: (context, child) {
-        if (child == null) return const SizedBox.shrink();
-        return M3akGlobalAssistantLayer(child: child);
-      },
     );
   }
 }
