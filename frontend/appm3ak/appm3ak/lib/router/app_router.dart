@@ -11,6 +11,8 @@ import '../features/community/screens/community_ai_entry_screen.dart';
 import '../features/community/screens/community_locations_screen.dart';
 import '../features/community/screens/community_live_screen.dart';
 import '../features/community/screens/community_main_screen.dart';
+import '../features/community/screens/messages_screen.dart';
+import '../features/community/screens/chat_screen.dart';
 import '../features/community/screens/community_nearby_places_screen.dart';
 import '../features/community/screens/create_help_request_screen.dart';
 import '../features/accessibility/accessibility_post_handoff.dart';
@@ -187,6 +189,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           final postId = q['postId'];
           final isHost = q['host'] == '1';
           return CommunityLiveScreen(postId: postId, isHost: isHost);
+        },
+      ),
+      GoRoute(
+        path: '/messages',
+        builder: (_, _) => const MessagesScreen(),
+      ),
+      GoRoute(
+        path: '/chat/:userId',
+        builder: (_, state) {
+          final userId = state.pathParameters['userId'] ?? '';
+          final name = state.uri.queryParameters['name'];
+          return ChatScreen(userId: userId, userName: name);
         },
       ),
       GoRoute(

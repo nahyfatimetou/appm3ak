@@ -214,6 +214,11 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                   label: const Text('Lancer un live'),
                 ),
                 IconButton(
+                  onPressed: () => context.push('/messages'),
+                  icon: const Icon(Icons.chat_outlined),
+                  tooltip: 'Messages',
+                ),
+                IconButton(
                   icon: const Icon(Icons.add_circle_outline),
                   onPressed: () => _openCreatePost(context),
                   tooltip: strings.createPost,

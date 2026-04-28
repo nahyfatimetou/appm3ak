@@ -914,6 +914,26 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 10),
+                              Semantics(
+                                button: true,
+                                label: 'Contacter l auteur de ce post',
+                                child: FilledButton.icon(
+                                  onPressed: post.userId.trim().isEmpty
+                                      ? null
+                                      : () => context.push(
+                                            '/chat/${post.userId}?name=${Uri.encodeComponent(post.userName)}',
+                                          ),
+                                  style: FilledButton.styleFrom(
+                                    minimumSize: Size(
+                                      double.infinity,
+                                      _simplifiedUi ? 56 : 50,
+                                    ),
+                                  ),
+                                  icon: const Icon(Icons.chat_bubble_outline),
+                                  label: const Text('💬 Contacter l’auteur'),
+                                ),
+                              ),
                               if (_autoReadPrefLoaded) ...[
                                 const SizedBox(height: 14),
                                 Text(

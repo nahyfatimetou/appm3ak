@@ -254,3 +254,119 @@ final updateHelpRequestStatusProvider = FutureProvider.family<HelpRequestModel, 
   invalidateHelpRequestListCaches(ref);
   return request;
 });
+
+// ========== MESSAGES (MVP local state) ==========
+
+class CommunityMessageThreadPreview {
+  const CommunityMessageThreadPreview({
+    required this.otherUserId,
+    required this.otherUserName,
+    required this.lastMessage,
+    required this.lastAt,
+  });
+
+  final String otherUserId;
+  final String otherUserName;
+  final String lastMessage;
+  final DateTime lastAt;
+}
+
+class CommunityChatMessage {
+  const CommunityChatMessage({
+    required this.id,
+    required this.otherUserId,
+    required this.senderId,
+    required this.receiverId,
+    required this.text,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String otherUserId;
+  final String senderId;
+  final String receiverId;
+  final String text;
+  final DateTime createdAt;
+}
+
+class CommunityMessagesNotifier extends StateNotifier<List<CommunityChatMessage>> {
+  CommunityMessagesNotifier() : super(const []);
+
+  List<CommunityChatMessage> messagesWith(String otherUserId) {
+    final items = state.where((m) => m.otherUserId == otherUserId).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return items;
+  }
+
+  void sendMessage({
+    required String currentUserId,
+    required String otherUserId,
+    required String text,
+  }) {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    final now = DateTime.now();
+    state = [
+      ...state,
+      CommunityChatMessage(
+        id: '${now.microsecondsSinceEpoch}_$currentUserId',
+        otherUserId: otherUserId,
+        senderId: currentUserId,
+        receiverId: otherUserId,
+        text: clean,
+        createdAt: now,
+      ),
+    ];
+  }
+
+  void receiveMockMessage({
+    required String currentUserId,
+    required String otherUserId,
+    required String text,
+  }) {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    final now = DateTime.now();
+    state = [
+      ...state,
+      CommunityChatMessage(
+        id: '${now.microsecondsSinceEpoch}_$otherUserId',
+        otherUserId: otherUserId,
+        senderId: otherUserId,
+        receiverId: currentUserId,
+        text: clean,
+        createdAt: now,
+      ),
+    ];
+  }
+
+  List<CommunityMessageThreadPreview> threadPreviews({
+    required String currentUserId,
+    Map<String, String>? names,
+  }) {
+    final byUser = <String, CommunityChatMessage>{};
+    for (final m in state) {
+      final prev = byUser[m.otherUserId];
+      if (prev == null || m.createdAt.isAfter(prev.createdAt)) {
+        byUser[m.otherUserId] = m;
+      }
+    }
+    final previews = byUser.entries.map((e) {
+      final uid = e.key;
+      final msg = e.value;
+      return CommunityMessageThreadPreview(
+        otherUserId: uid,
+        otherUserName: names?[uid] ?? 'Utilisateur',
+        lastMessage: msg.text,
+        lastAt: msg.createdAt,
+      );
+    }).toList()
+      ..sort((a, b) => b.lastAt.compareTo(a.lastAt));
+    return previews;
+  }
+}
+
+final communityMessagesProvider =
+    StateNotifierProvider<CommunityMessagesNotifier, List<CommunityChatMessage>>(
+  (ref) => CommunityMessagesNotifier(),
+);
