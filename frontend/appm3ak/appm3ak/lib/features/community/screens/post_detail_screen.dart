@@ -761,48 +761,48 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                 ),
                               ),
                               const SizedBox(height: 10),
-                              Text(
-                                post.contenu,
+                      Text(
+                        post.contenu,
                                 style: bodyStyle,
                                 softWrap: true,
-                              ),
-                              if (post.images != null && post.images!.isNotEmpty) ...[
+                      ),
+                      if (post.images != null && post.images!.isNotEmpty) ...[
                                 const SizedBox(height: 12),
-                                ...post.images!.map((path) {
-                                  final url = CommunityRepository.uploadUrl(path);
-                                  return Padding(
+                        ...post.images!.map((path) {
+                          final url = CommunityRepository.uploadUrl(path);
+                          return Padding(
                                     padding: const EdgeInsets.only(bottom: 10),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Image.network(
-                                        url,
-                                        width: double.infinity,
-                                        fit: BoxFit.cover,
-                                        loadingBuilder: (_, child, progress) {
-                                          if (progress == null) return child;
-                                          return SizedBox(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.network(
+                                url,
+                                width: double.infinity,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (_, child, progress) {
+                                  if (progress == null) return child;
+                                  return SizedBox(
                                             height: 180,
-                                            child: Center(
-                                              child: CircularProgressIndicator(
+                                    child: Center(
+                                      child: CircularProgressIndicator(
                                                 value: progress.expectedTotalBytes != null
-                                                    ? progress.cumulativeBytesLoaded /
-                                                        progress.expectedTotalBytes!
-                                                    : null,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        errorBuilder: (_, _, _) => Container(
-                                          height: 120,
-                                          color: theme.colorScheme.surfaceContainerHighest,
-                                          alignment: Alignment.center,
-                                          child: const Icon(Icons.broken_image),
-                                        ),
+                                            ? progress.cumulativeBytesLoaded /
+                                                progress.expectedTotalBytes!
+                                            : null,
                                       ),
                                     ),
                                   );
-                                }),
-                              ],
+                                },
+                                        errorBuilder: (_, _, _) => Container(
+                                  height: 120,
+                                          color: theme.colorScheme.surfaceContainerHighest,
+                                  alignment: Alignment.center,
+                                  child: const Icon(Icons.broken_image),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
                               const SizedBox(height: 12),
                               SwitchListTile(
                                 contentPadding: EdgeInsets.zero,
@@ -1131,11 +1131,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                     ),
                                     const SizedBox(height: 10),
                                     Text(
-                                      strings.noComments,
+                                  strings.noComments,
                                       textAlign: TextAlign.center,
-                                      style: theme.textTheme.bodyMedium?.copyWith(
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
                                     ),
                                   ],
                                 ),
@@ -1216,7 +1216,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
-                                    children: comments.map((comment) {
+                            children: comments.map((comment) {
                                       return _CommentCard(
                                         comment: comment,
                                         canDelete: _canDeleteComment(
@@ -1230,7 +1230,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                           comment: comment,
                                         ),
                                       );
-                                    }).toList(),
+                            }).toList(),
                                   ),
                                 ),
                               ),
@@ -1269,7 +1269,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
-                      children: [
+                    children: [
                         TextField(
                           controller: _commentController,
                           decoration: InputDecoration(
@@ -1360,9 +1360,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           alignment: WrapAlignment.end,
                           children: [
                             FilledButton.icon(
-                              onPressed: _isSubmittingComment ? null : _submitComment,
-                              icon: _isSubmittingComment
-                                  ? const SizedBox(
+                        onPressed: _isSubmittingComment ? null : _submitComment,
+                        icon: _isSubmittingComment
+                            ? const SizedBox(
                                       width: 18,
                                       height: 18,
                                       child:
@@ -1397,28 +1397,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         error: (error, stack) => Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.error_outline,
-                  size: 48,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 48,
+                color: theme.colorScheme.error,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                strings.errorLoadingPost,
+                  textAlign: TextAlign.center,
+                style: theme.textTheme.titleMedium?.copyWith(
                   color: theme.colorScheme.error,
                 ),
-                const SizedBox(height: 16),
-                Text(
-                  strings.errorLoadingPost,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.error,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () => context.pop(),
-                  child: Text(strings.goBack),
-                ),
-              ],
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => context.pop(),
+                child: Text(strings.goBack),
+              ),
+            ],
             ),
           ),
         ),
@@ -1478,35 +1478,35 @@ class _PostHeader extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              children: [
-                CircleAvatar(
-                  radius: 24,
-                  backgroundColor: typeColor.withValues(alpha: 0.12),
-                  child: Icon(typeIcon, size: 24, color: typeColor),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        post.userName,
+      children: [
+        CircleAvatar(
+          radius: 24,
+          backgroundColor: typeColor.withValues(alpha: 0.12),
+          child: Icon(typeIcon, size: 24, color: typeColor),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                post.userName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      if (post.createdAt != null)
-                        Text(
-                          _formatDate(post.createdAt!),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                    ],
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (post.createdAt != null)
+                Text(
+                  _formatDate(post.createdAt!),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
+            ],
+          ),
+        ),
                 if (post.user?.partenaire == true)
                   const PartnerOrgBadge(compact: true),
                 VerifiedHelperBadge(
@@ -1522,7 +1522,7 @@ class _PostHeader extends StatelessWidget {
                 _MetaChip(
                   icon: Icons.badge_outlined,
                   label: post.type.displayName,
-                  color: typeColor,
+              color: typeColor,
                 ),
                 if ((post.targetAudience ?? '').trim().isNotEmpty)
                   _MetaChip(
@@ -1613,10 +1613,10 @@ class _CommentCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          comment.userName,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                    comment.userName,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                         ),
                       ),
                       if (comment.user?.partenaire == true)

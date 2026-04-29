@@ -1293,7 +1293,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     _voiceSessionActive = false;
     _setListeningPulse(false);
 
-    setState(() {
+      setState(() {
       _headEyesModeActive = true;
       _headEyesInitializing = true;
       _headEyesPermissionDenied = false;
@@ -1344,8 +1344,8 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
           });
         }
         unawaited(_speakHeadEyes('Aucune caméra détectée.', force: true));
-        return;
-      }
+      return;
+    }
       final front = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
@@ -1376,7 +1376,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         return;
       }
 
-      setState(() {
+    setState(() {
         _headEyesCamera = controller;
         _headEyesInitializing = false;
         _headEyesLiveHint =
@@ -2772,10 +2772,10 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
                         const SizedBox(height: 16),
                       ],
                       DecoratedBox(
-                        decoration: BoxDecoration(
+                                              decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.14),
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
+                                                border: Border.all(
                             color: Colors.white.withValues(alpha: 0.28),
                           ),
                         ),
@@ -2800,17 +2800,17 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
                                 style: theme.textTheme.labelLarge?.copyWith(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                       const SizedBox(height: 12),
                       _buildBottomEssentialControls(theme, scheme),
                       const SizedBox(height: 10),
                       _buildUnifiedAudioModeButtons(),
-                      const SizedBox(height: 14),
+                                const SizedBox(height: 14),
                       Center(
                         child: Semantics(
                           button: true,
@@ -2844,13 +2844,13 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
                             ),
                           ),
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(
+                                          padding: const EdgeInsets.symmetric(
                               horizontal: 14,
                               vertical: 10,
-                            ),
-                            child: Text(
+                                          ),
+                                          child: Text(
                               _volumeStateHint,
-                              textAlign: TextAlign.center,
+                                            textAlign: TextAlign.center,
                               style: theme.textTheme.titleSmall?.copyWith(
                                 color: Colors.white,
                                 fontWeight: FontWeight.w800,
