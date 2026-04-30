@@ -35,3 +35,23 @@ coverage/
 # Uploads locaux (si présents)
 **/uploads/
 **/tmp/
+
+# Python local env / cache
+**/.venv/
+**/__pycache__/
+*.pyc
+
+# Flutter generated machine-specific files
+**/.flutter-plugins-dependencies
+**/android/local.properties
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Flutter/ephemeral/
+**/macos/Flutter/ephemeral/
+**/linux/flutter/ephemeral/
+**/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+# Local duplicate exports (not canonical repo source)
+appm3ak/
+web/
