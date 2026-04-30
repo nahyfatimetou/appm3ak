@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/volume/android_volume_hub.dart';
 import '../../../core/l10n/app_strings.dart';
 import '../../../data/models/post_model.dart';
 import '../../../data/repositories/community_repository.dart';
@@ -42,11 +43,25 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
   int _currentAudioSelectedPost = -1;
   List<PostModel> _audioPosts = const [];
   Timer? _audioNextTimer;
+  Future<bool> Function()? _previousVolumeUpPriority;
 
   @override
   void initState() {
     super.initState();
     _initAudioTts();
+    _bindVolumeShortcut();
+  }
+
+  void _bindVolumeShortcut() {
+    AndroidVolumeHub.ensureInitialized();
+    _previousVolumeUpPriority = AndroidVolumeHub.onVolumeUpPriority;
+    AndroidVolumeHub.onVolumeUpPriority = _onVolumeUpForAudioSelect;
+  }
+
+  Future<bool> _onVolumeUpForAudioSelect() async {
+    if (!mounted || _audioMode == null) return false;
+    _selectAudioPost(fallbackPosts: _audioPosts);
+    return true;
   }
 
   Future<void> _initAudioTts() async {
@@ -61,13 +76,16 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
     _audioNextTimer?.cancel();
     _audioStopRequested = true;
     _audioTts.stop();
+    if (AndroidVolumeHub.onVolumeUpPriority == _onVolumeUpForAudioSelect) {
+      AndroidVolumeHub.onVolumeUpPriority = _previousVolumeUpPriority;
+    }
     super.dispose();
   }
 
   Future<void> _speakAudioModeIntro() async {
     await _audioTts.stop();
     await _audioTts.speak(
-      'Je vais lire les posts. Double tapez pour choisir.',
+      'Je vais lire les posts. Appuyez sur volume plus pour choisir.',
     );
   }
 
@@ -95,8 +113,8 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
       setState(() => _currentAudioSelectedPost = i);
       final author = post.userName.trim().isEmpty ? 'Utilisateur inconnu' : post.userName.trim();
       final actionHint = _audioMode == 'voiceComment'
-          ? 'Double tapez pour commenter ce post avec la voix.'
-          : 'Double tapez pour choisir ce post.';
+          ? 'Appuyez sur volume plus pour commenter ce post avec la voix.'
+          : 'Appuyez sur volume plus pour choisir ce post.';
       final message = 'Post ${i + 1} de $author. ${_audioPreview(post)} $actionHint';
       await _audioTts.stop();
       await _audioTts.speak(message);
@@ -137,13 +155,26 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
     });
   }
 
-  void _onAudioDoubleTapSelect() {
+  /// Sélection du post en cours de lecture, ou [preferredIndex] dans [fallbackPosts]
+  /// quand la file audio interne n’est pas encore prête.
+  void _selectAudioPost({
+    int? preferredIndex,
+    List<PostModel>? fallbackPosts,
+  }) {
     if (_audioMode == null) return;
-    if (_audioPosts.isEmpty) return;
-    final idx = (_currentAudioSelectedPost < 0 || _currentAudioSelectedPost >= _audioPosts.length)
-        ? 0
-        : _currentAudioSelectedPost;
-    final post = _audioPosts[idx];
+    final source = _audioPosts.isNotEmpty
+        ? _audioPosts
+        : (fallbackPosts ?? const <PostModel>[]);
+    if (source.isEmpty) return;
+    final idx = preferredIndex != null &&
+            preferredIndex >= 0 &&
+            preferredIndex < source.length
+        ? preferredIndex
+        : (_currentAudioSelectedPost < 0 ||
+                _currentAudioSelectedPost >= source.length)
+            ? 0
+            : _currentAudioSelectedPost;
+    final post = source[idx];
     _audioStopRequested = true;
     _audioNextTimer?.cancel();
     _audioTts.stop();
@@ -158,7 +189,20 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final mode = GoRouterState.of(context).uri.queryParameters['mode'];
+    final uri = GoRouterState.of(context).uri;
+    final mode = uri.queryParameters['mode'];
+    final owner = uri.queryParameters['owner'];
+    final normalizedOwner = owner == 'mine'
+        ? _PostsOwnerSegment.mine
+        : owner == 'others'
+            ? _PostsOwnerSegment.others
+            : null;
+    if (normalizedOwner != null && _ownerSegment != normalizedOwner) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => _ownerSegment = normalizedOwner);
+      });
+    }
     final normalizedMode = (mode == 'readPost' || mode == 'readComments' || mode == 'voiceComment')
         ? mode
         : (mode == 'readCommentsAudio' ? 'readComments' : null);
@@ -199,31 +243,47 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                 bottom: BorderSide(color: theme.colorScheme.outline.withValues(alpha: 0.12)),
               ),
             ),
-            child: Row(
-              children: [
-                Text(
-                  strings.communityPosts,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: () => context.push('/community-live?host=1'),
-                  icon: const Icon(Icons.wifi_tethering),
-                  label: const Text('Lancer un live'),
-                ),
-                IconButton(
-                  onPressed: () => context.push('/messages'),
-                  icon: const Icon(Icons.chat_outlined),
-                  tooltip: 'Messages',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline),
-                  onPressed: () => _openCreatePost(context),
-                  tooltip: strings.createPost,
-                ),
-              ],
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 430;
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        strings.communityPosts,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    if (!compact)
+                      TextButton.icon(
+                        onPressed: () => context.push('/community-live?host=1'),
+                        icon: const Icon(Icons.wifi_tethering),
+                        label: const Text('Lancer un live'),
+                      )
+                    else
+                      IconButton(
+                        onPressed: () => context.push('/community-live?host=1'),
+                        icon: const Icon(Icons.wifi_tethering),
+                        tooltip: 'Lancer un live',
+                      ),
+                    IconButton(
+                      onPressed: () => context.push('/messages'),
+                      icon: const Icon(Icons.chat_outlined),
+                      tooltip: 'Messages',
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline),
+                      onPressed: () => _openCreatePost(context),
+                      tooltip: strings.createPost,
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           Padding(
@@ -409,7 +469,7 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                                   vertical: 12,
                                 ),
                                 child: Text(
-                                  'Mode audio : écoutez les posts puis double-tapez pour choisir.',
+                                  'Mode audio : écoutez les posts puis appuyez sur Volume+ pour choisir.',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     fontWeight: FontWeight.w700,
                                     color: theme.colorScheme.onPrimaryContainer,
@@ -446,7 +506,10 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                                   post.userId.trim().isNotEmpty &&
                                   post.userId.trim() == currentUserId,
                               onTap: _audioMode != null
-                                  ? () {}
+                                  ? () => _selectAudioPost(
+                                        preferredIndex: index,
+                                        fallbackPosts: filtered,
+                                      )
                                   : () => context.push(
                                         '/post-detail/${post.id}',
                                       ),
@@ -514,14 +577,13 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
                   ),
                 );
                 if (_audioMode == null) return listView;
-                final screenSize = MediaQuery.sizeOf(context);
                 return Stack(
                   children: [
                     listView,
                     Positioned.fill(
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: _onAudioDoubleTapSelect,
+                        onTap: () => _selectAudioPost(fallbackPosts: filtered),
                       ),
                     ),
                     Positioned(
@@ -593,14 +655,16 @@ class _CommunityPostsScreenState extends ConsumerState<CommunityPostsScreen> {
               ),
             ),
           ),
-          Positioned(
-            right: 14,
-            bottom: 14,
-            child: FloatingActionButton.extended(
-              heroTag: 'community_add_post_fab',
-              onPressed: () => _openCreatePost(context),
-              icon: const Icon(Icons.add),
-              label: const Text('Ajouter post'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FloatingActionButton.extended(
+                heroTag: 'community_add_post_fab',
+                onPressed: () => _openCreatePost(context),
+                icon: const Icon(Icons.add),
+                label: const Text('Ajouter post'),
+              ),
             ),
           ),
         ],

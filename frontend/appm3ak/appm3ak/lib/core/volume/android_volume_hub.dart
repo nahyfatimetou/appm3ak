@@ -1,5 +1,5 @@
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'dart:io' show Platform;
+
 import 'package:flutter/services.dart';
 
 /// Un seul [MethodChannel] Android pour volume+ : priorité au menu vibrations,
@@ -36,8 +36,7 @@ class AndroidVolumeHub {
   }
 
   static void ensureInitialized() {
-    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-    if (_initialized || !isAndroid) return;
+    if (_initialized || !Platform.isAndroid) return;
     _initialized = true;
     _channel.setMethodCallHandler(_dispatch);
   }

@@ -49,6 +49,7 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   Timer? _partialDebounce;
   Timer? _photoChoiceTimer;
+  Future<bool> Function()? _previousVolumeUpPriority;
 
   _Phase _phase = _Phase.idle;
   bool _speechReady = false;
@@ -86,11 +87,11 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
   static const String _ttsPublishReady =
       'Publication prête. Appuyez sur Volume plus pour publier ou utilisez le bouton publier.';
   static const String _ttsPublishSuccess =
-      'Publication envoyée avec succès. Vous pouvez la consulter dans la liste des posts.';
+      'Publication en cours de traitement. Vérifiez ensuite dans Mes posts.';
 
   _VoiceVibrationFlowState get _flowState {
     if (_phase == _Phase.listening) return _VoiceVibrationFlowState.listening;
-    if (_extraImages.isNotEmpty) {
+    if (_extraImages.isNotEmpty || _messageMeetsMinimum(_lockedMessage)) {
       return _VoiceVibrationFlowState.readyToPublish;
     }
     return _VoiceVibrationFlowState.idle;
@@ -105,6 +106,7 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
       return;
     }
     AndroidVolumeHub.ensureInitialized();
+    _previousVolumeUpPriority = AndroidVolumeHub.onVolumeUpPriority;
     AndroidVolumeHub.onVolumeUpPriority = _onVolumeUp;
     _initSpeech();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -281,7 +283,7 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
     unawaited(_speech.stop());
     unawaited(_tts.stop());
     if (AndroidVolumeHub.onVolumeUpPriority == _onVolumeUp) {
-      AndroidVolumeHub.onVolumeUpPriority = null;
+      AndroidVolumeHub.onVolumeUpPriority = _previousVolumeUpPriority;
     }
     super.dispose();
   }
@@ -297,9 +299,13 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
       await _finishDictationAndConfirm();
       return;
     }
-    // Avant photo: Volume+ démarre/arrête dictée.
-    // Après photo attachée: Volume+ publie explicitement.
-    if (_extraImages.isNotEmpty) {
+    // Volume+ publie dès qu'il y a un brouillon valide (texte et/ou photo).
+    final hasLocked = _messageMeetsMinimum(_lockedMessage);
+    final hasDraft = _messageMeetsMinimum(_finalText);
+    if (hasLocked || hasDraft || _extraImages.isNotEmpty) {
+      if (!hasLocked && hasDraft) {
+        _lockedMessage = _finalText.trim();
+      }
       unawaited(_popHandoff());
       return;
     }
@@ -464,6 +470,7 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
       // Le texte éventuel n'est pas verrouillé ici; l'utilisateur peut encore dicter.
       if (handoff.content.trim().isNotEmpty) {
         _finalText = handoff.content.trim();
+        _lockedMessage = handoff.content.trim();
       }
       for (final img in handoff.images) {
         if (_extraImages.length >= _maxImages) break;
@@ -604,7 +611,7 @@ class _VoiceVibrationPostScreenState extends State<VoiceVibrationPostScreen> {
                       ),
                     ),
                     Text(
-                      'Après la photo : Volume+ pour publier',
+                      'Après dictée ou photo : Volume+ pour publier',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,

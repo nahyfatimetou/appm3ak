@@ -49,7 +49,7 @@ class CommunityAiEntryScreen extends ConsumerStatefulWidget {
 }
 
 class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final TextEditingController _inputController = TextEditingController();
   /// Permet de capturer le texte au moment où le champ perd le focus (avant que
   /// l’IME Android ne vide parfois le [TextEditingController] quand on tape sur « Analyser »).
@@ -86,11 +86,13 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
   CameraController? _headEyesCamera;
   FaceDetector? _headEyesFaceDetector;
   bool _headEyesProcessingFrame = false;
+  bool _headEyesNavigating = false;
+  bool _headEyesNeedsResumeAfterPause = false;
+  bool _headEyesFaceDetectedDebug = false;
   int _headEyesSelectedIndex = 0;
   double _headEyesConfirmProgress = 0;
   DateTime _headEyesLastNavAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _headEyesAwaitNeutral = false;
-  bool _headEyesEyesWereOpen = false;
   DateTime? _headEyesEyeClosedSince;
   DateTime _headEyesLastGestureConfirmAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime? _headEyesNeutralStillSince;
@@ -100,22 +102,35 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
   DateTime? _headEyesLastFaceSeenAt;
   int _headEyesNoFaceStreak = 0;
   String _headEyesPendingSelectionPrompt = '';
+  double? _headEyesLastYaw;
+  double? _headEyesLastLeftEye;
+  double? _headEyesLastRightEye;
+  String _headEyesLastGestureDebug = 'aucun';
+  bool _headEyesLastStreamState = false;
+  bool _headEyesLastNoFaceLogged = false;
+  DateTime _headEyesLastDebugSetStateAt = DateTime.fromMillisecondsSinceEpoch(0);
+  /// Après l’ouverture du flux caméra : pas de validation par yeux/immobilité
+  /// (évite un faux « validation » au repos pendant l’intro TTS).
+  DateTime? _headEyesConfirmAllowedAfter;
+  static const bool kHeadEyesDebug = true;
 
   static const Duration _headEyesTtsMinGap = Duration(milliseconds: 900);
-  static const Duration _headEyesNoFaceTtsMinGap = Duration(milliseconds: 5000);
-  static const Duration _headEyesFrameThrottle = Duration(milliseconds: 150);
+  static const Duration _headEyesNoFaceTtsMinGap = Duration(milliseconds: 3200);
+  static const Duration _headEyesFrameThrottle = Duration(milliseconds: 300);
   static const int _headEyesNoFaceWarnStreak = 8;
-  static const Duration _headEyesNoFaceGrace = Duration(milliseconds: 1800);
-  static const Duration _headEyesNavCooldown = Duration(milliseconds: 750);
+  static const Duration _headEyesNoFaceGrace = Duration(milliseconds: 1300);
+  static const Duration _headEyesNavCooldown = Duration(milliseconds: 900);
   static const Duration _headEyesEyeHoldConfirm = Duration(milliseconds: 1000);
-  static const Duration _headEyesStillnessConfirm = Duration(milliseconds: 2200);
-  static const Duration _headEyesGestureConfirmCooldown = Duration(milliseconds: 1400);
-  static const double _headEyesYawNext = 12;
-  static const double _headEyesYawPrev = -12;
-  static const double _headEyesYawNeutral = 11;
+  static const Duration _headEyesStillnessConfirm = Duration(milliseconds: 2800);
+  static const Duration _headEyesGestureConfirmCooldown = Duration(milliseconds: 1700);
+  static const Duration _headEyesConfirmGraceAfterStream =
+      Duration(seconds: 6);
+  static const double _headEyesYawNext = 15;
+  static const double _headEyesYawPrev = -15;
+  static const double _headEyesYawNeutral = 9;
   static const double _headEyesEyeClosedMax = 0.40;
   static const double _headEyesEyeOpenMin = 0.48;
-  static const double _headEyesMinFaceCoverage = 0.015;
+  static const double _headEyesMinFaceCoverage = 0.02;
 
   static const List<String> _headEyesOptionLabels = <String>[
     'Poster photo (voix)',
@@ -552,6 +567,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _listenPulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
@@ -570,6 +586,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb && Platform.isAndroid) {
       if (AndroidVolumeHub.onVolumeUpPriority == _onVolumeUpVoice) {
         AndroidVolumeHub.onVolumeUpPriority = _previousVolumeUpPriority;
@@ -584,6 +601,57 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     _inputFocusNode.dispose();
     _inputController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!_headEyesModeActive || kIsWeb) return;
+    if (kHeadEyesDebug) {
+      debugPrint('[HeadEyesDebug] lifecycle changed: $state');
+    }
+    if (state == AppLifecycleState.inactive) {
+      // Samsung can emit inactive during transient UI overlays (IME, system bars).
+      // Do not tear down camera pipeline on inactive.
+      return;
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _headEyesNeedsResumeAfterPause = true;
+      final cam = _headEyesCamera;
+      if (cam != null && cam.value.isStreamingImages) {
+        unawaited(() async {
+          try {
+            await cam.stopImageStream();
+            if (kHeadEyesDebug) {
+              debugPrint('[HeadEyesDebug] stream stopped on lifecycle pause');
+            }
+          } catch (_) {}
+        }());
+      }
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      if (!_headEyesNeedsResumeAfterPause) return;
+      _headEyesNeedsResumeAfterPause = false;
+      final cam = _headEyesCamera;
+      if (cam != null && cam.value.isInitialized) {
+        unawaited(() async {
+          try {
+            if (!cam.value.isStreamingImages) {
+              await cam.startImageStream(_onHeadEyesCameraImage);
+              if (kHeadEyesDebug) {
+                debugPrint('[HeadEyesDebug] stream resumed without full camera restart');
+              }
+            }
+          } catch (_) {
+            await _startHeadEyesCameraMode(forceRestart: true);
+          }
+        }());
+        return;
+      }
+      unawaited(_startHeadEyesCameraMode(forceRestart: true));
+    }
   }
 
   void _onInputFocusChanged() {
@@ -1164,6 +1232,30 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     setState(() => _headEyesLiveHint = value);
   }
 
+  void _setHeadEyesDebugSnapshot({
+    bool? faceDetected,
+    double? yaw,
+    double? leftEye,
+    double? rightEye,
+    String? gesture,
+  }) {
+    _headEyesFaceDetectedDebug = faceDetected ?? _headEyesFaceDetectedDebug;
+    _headEyesLastYaw = yaw ?? _headEyesLastYaw;
+    _headEyesLastLeftEye = leftEye ?? _headEyesLastLeftEye;
+    _headEyesLastRightEye = rightEye ?? _headEyesLastRightEye;
+    if (gesture != null && gesture.isNotEmpty) {
+      _headEyesLastGestureDebug = gesture;
+    }
+    if (!kHeadEyesDebug || !mounted) return;
+    final now = DateTime.now();
+    if (now.difference(_headEyesLastDebugSetStateAt) <
+        const Duration(milliseconds: 120)) {
+      return;
+    }
+    _headEyesLastDebugSetStateAt = now;
+    setState(() {});
+  }
+
   Future<void> _disposeHeadEyesMode() async {
     final det = _headEyesFaceDetector;
     _headEyesFaceDetector = null;
@@ -1271,7 +1363,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     return null;
   }
 
-  Future<void> _startHeadEyesCameraMode() async {
+  Future<void> _startHeadEyesCameraMode({bool forceRestart = false}) async {
     if (kIsWeb) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1284,7 +1376,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       }
       return;
     }
-    if (_headEyesModeActive) return;
+    if (_headEyesModeActive && !forceRestart) return;
 
     await _tts.stop();
     if (_speech.isListening) {
@@ -1297,16 +1389,20 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       _headEyesModeActive = true;
       _headEyesInitializing = true;
       _headEyesPermissionDenied = false;
+      _headEyesNavigating = false;
       _headEyesSelectedIndex = 0;
       _headEyesConfirmProgress = 0;
       _headEyesAwaitNeutral = false;
-      _headEyesEyesWereOpen = false;
       _headEyesEyeClosedSince = null;
       _headEyesNeutralStillSince = null;
       _headEyesLastFaceSeenAt = null;
       _headEyesNoFaceStreak = 0;
+      _headEyesConfirmAllowedAfter = null;
       _headEyesLiveHint = 'Initialisation de la caméra…';
     });
+    if (kHeadEyesDebug) {
+      debugPrint('[HeadEyesDebug] start mode requested');
+    }
 
     await _disposeHeadEyesMode();
 
@@ -1346,10 +1442,27 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         unawaited(_speakHeadEyes('Aucune caméra détectée.', force: true));
       return;
     }
-      final front = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-        orElse: () => cameras.first,
-      );
+      final frontCameras = cameras
+          .where((c) => c.lensDirection == CameraLensDirection.front)
+          .toList();
+      if (frontCameras.isEmpty) {
+        await _disposeHeadEyesMode();
+        if (mounted) {
+          setState(() {
+            _headEyesInitializing = false;
+            _headEyesLiveHint =
+                'Caméra avant non disponible. Le mode tête/yeux nécessite la caméra selfie.';
+          });
+        }
+        unawaited(
+          _speakHeadEyes(
+            'Caméra avant non disponible. Ce mode nécessite la caméra selfie.',
+            force: true,
+          ),
+        );
+        return;
+      }
+      final front = frontCameras.first;
 
       var controller = CameraController(
         front,
@@ -1360,6 +1473,11 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       );
       try {
         await controller.initialize();
+        if (kHeadEyesDebug) {
+          debugPrint(
+            '[HeadEyesDebug] camera initialized: id=${front.name} lens=${front.lensDirection.name}',
+          );
+        }
       } catch (_) {
         await controller.dispose();
         controller = CameraController(
@@ -1369,6 +1487,11 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
           imageFormatGroup: ImageFormatGroup.yuv420,
         );
         await controller.initialize();
+        if (kHeadEyesDebug) {
+          debugPrint(
+            '[HeadEyesDebug] camera initialized (fallback format): id=${front.name} lens=${front.lensDirection.name}',
+          );
+        }
       }
 
       if (!mounted) {
@@ -1385,9 +1508,32 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
       try {
         await controller.startImageStream(_onHeadEyesCameraImage);
+        if (kHeadEyesDebug) {
+          debugPrint(
+            '[HeadEyesDebug] image stream started: id=${front.name} lens=${front.lensDirection.name}',
+          );
+        }
       } catch (_) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         await controller.startImageStream(_onHeadEyesCameraImage);
+        if (kHeadEyesDebug) {
+          debugPrint(
+            '[HeadEyesDebug] image stream started after retry: id=${front.name} lens=${front.lensDirection.name}',
+          );
+        }
+      }
+
+      final armAt = DateTime.now().add(_headEyesConfirmGraceAfterStream);
+      if (mounted) {
+        setState(() {
+          _headEyesConfirmAllowedAfter = armAt;
+          _headEyesLastGestureConfirmAt = DateTime.now();
+        });
+      }
+      if (kHeadEyesDebug) {
+        debugPrint(
+          '[HeadEyesDebug] confirmation armed at ${armAt.toIso8601String()}',
+        );
       }
 
       unawaited(() async {
@@ -1444,6 +1590,12 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     _headEyesLastNavAt = DateTime.now();
     _headEyesAwaitNeutral = true;
     _headEyesPendingSelectionPrompt = _headEyesOptionLabels[_headEyesSelectedIndex];
+    _setHeadEyesDebugSnapshot(gesture: 'navigation_${delta > 0 ? 'next' : 'prev'}');
+    if (kHeadEyesDebug) {
+      debugPrint(
+        '[HeadEyesDebug] navigation trigger -> selected=$_headEyesSelectedIndex label=$_headEyesPendingSelectionPrompt',
+      );
+    }
     _setAssistantState('Choix sélectionné');
     _setHeadEyesLiveHint(
       'Choix sélectionné : $_headEyesPendingSelectionPrompt. Fermez les yeux pour confirmer.',
@@ -1458,35 +1610,61 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
   }
 
   void _handleHeadEyesFace(Face face) {
-    if (!_headEyesModeActive || _headEyesInitializing) return;
+    if (!_headEyesModeActive || _headEyesInitializing || _headEyesNavigating) return;
 
     final y = face.headEulerAngleY;
     final left = face.leftEyeOpenProbability;
     final right = face.rightEyeOpenProbability;
     final now = DateTime.now();
+    final confirmArmed = _headEyesConfirmAllowedAfter != null &&
+        !now.isBefore(_headEyesConfirmAllowedAfter!);
+    _setHeadEyesDebugSnapshot(
+      faceDetected: true,
+      yaw: y,
+      leftEye: left,
+      rightEye: right,
+    );
 
     var progress = 0.0;
     var eyesClosedTracking = false;
 
-    if (left != null && right != null) {
+    if (!confirmArmed) {
+      _headEyesEyeClosedSince = null;
+      _headEyesNeutralStillSince = null;
+      if (_headEyesConfirmProgress > 0 && mounted) {
+        setState(() => _headEyesConfirmProgress = 0);
+      }
+    } else if (left != null && right != null) {
       final minEye = math.min(left, right);
+      final maxEye = math.max(left, right);
       if (minEye >= _headEyesEyeOpenMin) {
-        _headEyesEyesWereOpen = true;
         _headEyesEyeClosedSince = null;
         _headEyesNeutralStillSince = null;
         if (_headEyesConfirmProgress > 0 && mounted) {
           setState(() => _headEyesConfirmProgress = 0);
         }
-      } else if (minEye <= _headEyesEyeClosedMax) {
+      } else if (maxEye <= _headEyesEyeClosedMax) {
         eyesClosedTracking = true;
+        if (_headEyesEyeClosedSince == null) {
+          _setHeadEyesDebugSnapshot(gesture: 'eyes_close_confirm_start');
+          if (kHeadEyesDebug) {
+            debugPrint(
+              '[HeadEyesDebug] eyes close confirmation starts: left=${left?.toStringAsFixed(2)} right=${right?.toStringAsFixed(2)}',
+            );
+          }
+        }
         _headEyesEyeClosedSince ??= now;
         _headEyesNeutralStillSince = null;
         final held = now.difference(_headEyesEyeClosedSince!);
         progress = (held.inMilliseconds / _headEyesEyeHoldConfirm.inMilliseconds)
             .clamp(0.0, 1.0);
+      } else {
+        // Zone ambiguë entre ouvert et fermé : ne pas valider par erreur.
+        _headEyesEyeClosedSince = null;
+        _headEyesNeutralStillSince = null;
       }
-    } else {
-      // Pas de proba yeux fiable : immobilité tête "neutre" comme repli.
+    } else if (left == null && right == null) {
+      // Repli immobilité uniquement si ML Kit n'expose aucune proba (pas si une seule est null).
       if (y != null && y.abs() < _headEyesYawNeutral) {
         _headEyesNeutralStillSince ??= now;
         final st = now.difference(_headEyesNeutralStillSince!);
@@ -1496,6 +1674,9 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       } else {
         _headEyesNeutralStillSince = null;
       }
+    } else {
+      _headEyesNeutralStillSince = null;
+      _headEyesEyeClosedSince = null;
     }
 
     if (progress != _headEyesConfirmProgress ||
@@ -1505,20 +1686,25 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       }
     }
 
-    final confirmReady = eyesClosedTracking
-        ? (_headEyesEyeClosedSince != null &&
-            now.difference(_headEyesEyeClosedSince!) >= _headEyesEyeHoldConfirm)
-        : (left == null &&
-            right == null &&
-            _headEyesNeutralStillSince != null &&
-            now.difference(_headEyesNeutralStillSince!) >=
-                _headEyesStillnessConfirm);
+    final confirmReady = confirmArmed &&
+        (eyesClosedTracking
+            ? (_headEyesEyeClosedSince != null &&
+                now.difference(_headEyesEyeClosedSince!) >=
+                    _headEyesEyeHoldConfirm)
+            : (left == null &&
+                right == null &&
+                _headEyesNeutralStillSince != null &&
+                now.difference(_headEyesNeutralStillSince!) >=
+                    _headEyesStillnessConfirm));
 
     if (confirmReady &&
         now.difference(_headEyesLastGestureConfirmAt) >=
             _headEyesGestureConfirmCooldown) {
+      _setHeadEyesDebugSnapshot(gesture: 'confirm_complete');
+      if (kHeadEyesDebug) {
+        debugPrint('[HeadEyesDebug] confirmation completes');
+      }
       _headEyesLastGestureConfirmAt = now;
-      _headEyesEyesWereOpen = false;
       _headEyesEyeClosedSince = null;
       _headEyesNeutralStillSince = null;
       if (mounted) setState(() => _headEyesConfirmProgress = 0);
@@ -1532,6 +1718,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
     if (_headEyesAwaitNeutral) {
       if (y.abs() < _headEyesYawNeutral) {
+        _setHeadEyesDebugSnapshot(gesture: 'neutral_reset');
         if (mounted) setState(() => _headEyesAwaitNeutral = false);
       }
       return;
@@ -1540,14 +1727,23 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     if (now.difference(_headEyesLastNavAt) < _headEyesNavCooldown) return;
 
     if (y >= _headEyesYawNext) {
+      _setHeadEyesDebugSnapshot(gesture: 'yaw_cross_next');
+      if (kHeadEyesDebug) {
+        debugPrint('[HeadEyesDebug] yaw crossed NEXT threshold: yaw=${y.toStringAsFixed(1)}');
+      }
       _headEyesBumpSelection(1);
     } else if (y <= _headEyesYawPrev) {
+      _setHeadEyesDebugSnapshot(gesture: 'yaw_cross_prev');
+      if (kHeadEyesDebug) {
+        debugPrint('[HeadEyesDebug] yaw crossed PREV threshold: yaw=${y.toStringAsFixed(1)}');
+      }
       _headEyesBumpSelection(-1);
     }
   }
 
   Future<void> _headEyesOnConfirmGesture() async {
-    if (!mounted) return;
+    if (!mounted || _headEyesNavigating) return;
+    _headEyesNavigating = true;
     HapticFeedback.heavyImpact();
     _setAssistantState('Prêt à naviguer');
     await _speakHeadEyes('Option sélectionnée.', force: true);
@@ -1555,7 +1751,10 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
     await _exitHeadEyesCameraMode();
 
-    if (!mounted) return;
+    if (!mounted) {
+      _headEyesNavigating = false;
+      return;
+    }
 
     switch (idx) {
       case 0:
@@ -1580,6 +1779,7 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
         context.push('/community-posts?mode=voiceComment');
         return;
       default:
+        _headEyesNavigating = false;
         return;
     }
   }
@@ -1663,7 +1863,8 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
   Future<void> _onHeadEyesCameraImage(CameraImage image) async {
     if (_headEyesProcessingFrame ||
         !_headEyesModeActive ||
-        _headEyesFaceDetector == null) {
+        _headEyesFaceDetector == null ||
+        _headEyesNavigating) {
       return;
     }
     final now = DateTime.now();
@@ -1673,6 +1874,13 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
     _headEyesLastFrameHandledAt = now;
     final controller = _headEyesCamera;
     if (controller == null || !controller.value.isInitialized) return;
+    final streamState = controller.value.isStreamingImages;
+    if (streamState != _headEyesLastStreamState) {
+      _headEyesLastStreamState = streamState;
+      if (kHeadEyesDebug) {
+        debugPrint('[HeadEyesDebug] camera streaming state changed: $streamState');
+      }
+    }
 
     _headEyesProcessingFrame = true;
     try {
@@ -1680,6 +1888,11 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       if (input == null) return;
       final faces = await _headEyesFaceDetector!.processImage(input);
       if (!mounted || faces.isEmpty) {
+        _setHeadEyesDebugSnapshot(faceDetected: false, gesture: 'mlkit_no_face');
+        if (!_headEyesLastNoFaceLogged && kHeadEyesDebug) {
+          _headEyesLastNoFaceLogged = true;
+          debugPrint('[HeadEyesDebug] ML Kit: no face detected');
+        }
         _headEyesNoFaceStreak += 1;
         final nowNoFace = DateTime.now();
         final recentFaceSeen = _headEyesLastFaceSeenAt != null &&
@@ -1702,6 +1915,10 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
           );
         }
         return;
+      }
+      _headEyesLastNoFaceLogged = false;
+      if (kHeadEyesDebug) {
+        debugPrint('[HeadEyesDebug] ML Kit: face detected count=${faces.length}');
       }
       final targetFace = _pickLargestFace(faces);
       if (_faceCoverageTooSmall(targetFace, image)) {
@@ -1870,6 +2087,48 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
             ),
           ),
         const SizedBox(height: 16),
+        if (kHeadEyesDebug)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.38),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: DefaultTextStyle(
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontFamily: 'monospace',
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('cameraInitialized=${cam?.value.isInitialized == true}'),
+                  Text('streamingImages=${cam?.value.isStreamingImages == true}'),
+                  Text('faceDetected=${_headEyesFaceDetectedDebug}'),
+                  Text('yaw=${_headEyesLastYaw?.toStringAsFixed(2) ?? '-'}'),
+                  Text('leftEyeOpen=${_headEyesLastLeftEye?.toStringAsFixed(2) ?? '-'}'),
+                  Text('rightEyeOpen=${_headEyesLastRightEye?.toStringAsFixed(2) ?? '-'}'),
+                  Text('selectedOption=$_headEyesSelectedIndex'),
+                  Text('awaitNeutral=$_headEyesAwaitNeutral'),
+                  Text('lastGesture=$_headEyesLastGestureDebug'),
+                  Text('confirmProgress=${_headEyesConfirmProgress.toStringAsFixed(2)}'),
+                  Text(
+                    'confirmArmed=${() {
+                      final t = _headEyesConfirmAllowedAfter;
+                      if (t == null) return 'non';
+                      return DateTime.now().isBefore(t) ? 'plus tard (${t.toIso8601String()})' : 'oui';
+                    }()}',
+                  ),
+                  Text(
+                    'camera=${cam == null ? 'null' : '${cam.description.name}/${cam.description.lensDirection.name}'}',
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (_headEyesConfirmProgress > 0)
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2025,32 +2284,30 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
       required VoidCallback? onTap,
       required String semanticsLabel,
     }) {
-      return Expanded(
-        child: Semantics(
-          button: true,
-          label: semanticsLabel,
-          child: Material(
-            color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      return Semantics(
+        button: true,
+        label: semanticsLabel,
+        child: Material(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            onTap: onTap,
             borderRadius: BorderRadius.circular(14),
-            child: InkWell(
-              onTap: onTap,
-              borderRadius: BorderRadius.circular(14),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, color: scheme.primary, size: 26),
-                    const SizedBox(height: 6),
-                    Text(
-                      label,
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: scheme.primary, size: 26),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -2060,11 +2317,13 @@ class _CommunityAiEntryScreenState extends ConsumerState<CommunityAiEntryScreen>
 
     return Row(
       children: [
-        cell(
-          icon: Icons.keyboard_alt_outlined,
-          label: 'Clavier',
-          semanticsLabel: 'Saisir au clavier',
-          onTap: _isAnalyzing ? null : _openKeyboardInput,
+        Expanded(
+          child: cell(
+            icon: Icons.keyboard_alt_outlined,
+            label: 'Clavier',
+            semanticsLabel: 'Saisir au clavier',
+            onTap: _isAnalyzing ? null : _openKeyboardInput,
+          ),
         ),
       ],
     );

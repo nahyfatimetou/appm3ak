@@ -412,7 +412,7 @@ class _CreatePostScreenState extends ConsumerState<CreatePostScreen> {
           ),
         );
         if (_redirectToPostsAfterSubmit) {
-          context.go('/community-posts');
+          context.go('/community-posts?owner=mine');
         } else {
           context.pop();
         }
