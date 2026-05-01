@@ -44,6 +44,8 @@ Navigation principale : écran d’accueil avec onglets — `MainShell` — quer
 
 | Document | Contenu |
 |----------|---------|
+| **[`README_COMMUNAUTE_IA.md`](README_COMMUNAUTE_IA.md)** | **IA communauté** : architecture (Flutter → Nest → Python), dataset/modèle, variables d’env, liens vers la doc technique. |
+| **[`README_MODULE_COMMUNAUTE_SCENARIOS.md`](README_MODULE_COMMUNAUTE_SCENARIOS.md)** | Vue **métier** par module avec scénarios utilisateur pas-à-pas. |
 | **[`frontend/.../features/community/README.md`](frontend/appm3ak/appm3ak/lib/features/community/README.md)** | Vue d’ensemble **Flutter** : onglets, création de post inclusive, liens vers routes et données. |
 | **[`frontend/.../features/community/README_AIDE.md`](frontend/appm3ak/appm3ak/lib/features/community/README_AIDE.md)** | **Demandes d’aide** : modèle MongoDB, API, priorisation (`HelpPriorityService`), écrans et badges. |
 | **[`frontend/.../features/community/docs/INDEX.md`](frontend/appm3ak/appm3ak/lib/features/community/docs/INDEX.md)** | Index de la **référence technique** (valeurs exactes, DTO backend, payloads repository, modèles). |
